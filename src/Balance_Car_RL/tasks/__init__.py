@@ -8,3 +8,6 @@
 from isaaclab_tasks.utils import import_packages
 
 import_packages(__name__, ["utils", ".mdp"])
+
+# Car tasks (BalanceCar-*): importing the package runs its gym.register() calls.
+import Balance_Car_RL.car  # noqa: E402, F401

@@ -1,0 +1,28 @@
+{
+  "stage": "velocity",
+  "task": "BalanceCar-Velocity-v0",
+  "run": "logs/rsl_rl/balance_car_velocity/2026-09-26_20-21-58",
+  "checkpoint": "model_499.pt",
+  "date": "2026-09-26T20:34:06",
+  "needs": [
+    "pitch"
+  ],
+  "evaluation": {
+    "controller": "policy logs/rsl_rl/balance_car_velocity/2026-09-26_20-21-58/model_499.pt",
+    "episodes finished": 768,
+    "fall rate": 0.0,
+    "rms pitch [rad]": 0.0593923200534218,
+    "pitch estimate RMS error [rad]": 0.05150073946145093,
+    "mean |wheel speed| [rad/s]": 3.83191377278032,
+    "mean |wheel torque| [N m]": 0.00868003543097012,
+    "mean planar speed [m/s]": 0.14441860696365094,
+    "max pitch seen [rad]": 0.6475092768669128,
+    "RMS speed tracking error [m/s]": 0.16390664812492156,
+    "settled RMS speed error, 1.5 s after a command change [m/s]": 0.11448095636672771,
+    "median / 90th percentile |speed error| [m/s]": [
+      0.037522703409194946,
+      0.28677743673324585
+    ],
+    "pass": true
+  }
+}
