@@ -15,7 +15,7 @@ def test_open_loop_has_one_unstable_pole(plant):
     a, _, _ = plant
     eig = np.linalg.eigvals(a)
     assert np.sum(eig.real > 1e-6) == 1
-    assert 5.0 < eig.real.max() < 20.0  # docs/03-dynamics.md: about 9.2 rad/s
+    assert 5.0 < eig.real.max() < 20.0  # guide/03_dynamics.md: about 9.2 rad/s
 
 
 def test_lqr_stabilizes_the_linear_model(plant):

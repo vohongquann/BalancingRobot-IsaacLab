@@ -1,12 +1,7 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
-
 """Configuration for the Pololu Balboa 32U4 (``assets/data/balboa/balboa.urdf``).
 
-Every physical constant of the project lives here; sources and the list of assumptions are in ``docs/01-robot.md``.
-Formulas: ``docs/03-dynamics.md`` (motor and plant), ``docs/02-sensing.md`` (IMU).
+Every physical constant of the project lives here; sources and the list of assumptions are in ``guide/01_robot.md``.
+Formulas: ``guide/03_dynamics.md`` (motor and plant), ``guide/02_sensing.md`` (IMU).
 
 The URDF is generated from the Pololu CAD by ``tools/build_balboa_urdf.py`` (which reads the masses below). Frame:
 x forward, y left, z up, origin on the wheel axle, posed at the equilibrium where the centre of mass is straight above
@@ -34,7 +29,7 @@ this is also the spawn height."""
 # ── Mass ────────────────────────────────────────────────────────────────────────────────
 BASE_MASS_KG = 0.27
 """Chassis, control board, six AA cells and two gearmotors [kg]. Not published: a nominal estimate, spread over the CAD
-volumes to place the centre of mass (19.9 mm above the axle). Weigh the real robot (``docs/01-robot.md``)."""
+volumes to place the centre of mass (19.9 mm above the axle). Weigh the real robot (``guide/01_robot.md``)."""
 
 WHEEL_MASS_KG = 0.020
 """One Pololu 80x10 mm wheel with its hub [kg]. Not published: a nominal estimate."""

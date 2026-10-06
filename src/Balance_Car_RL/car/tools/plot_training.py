@@ -1,6 +1,6 @@
 """Plot reward and episode length of a training run from its TensorBoard events.
 
-Usage: python src/Balance_Car_RL/car/tools/plot_training.py RUN_DIR [--out docs/media/training_curve.png]
+Usage: python src/Balance_Car_RL/car/tools/plot_training.py RUN_DIR [--out guide/media/training_curve.png]
 """
 
 import argparse
@@ -21,7 +21,7 @@ def main() -> None:
     parser.add_argument(
         "run", type=pathlib.Path, help="Run folder with the TensorBoard events (logs/rsl_rl/<experiment>/<run>)."
     )
-    parser.add_argument("--out", type=pathlib.Path, default=ROOT / "docs/media/training_curve.png")
+    parser.add_argument("--out", type=pathlib.Path, default=ROOT / "guide/media/training_curve.png")
     parser.add_argument("--title", default=None, help="Figure title (default: the run's experiment name).")
     args = parser.parse_args()
     acc = EventAccumulator(str(args.run))

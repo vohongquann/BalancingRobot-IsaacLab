@@ -12,7 +12,6 @@ from car_bridge.estimator import R_CAR_FROM_IMU, TAU_S, GravityEstimator
 from Balance_Car_RL.car import car_cfg
 from Balance_Car_RL.car.estimation import (
     compensate_acceleration,
-    gravity_from_accel,
     gravity_step,
     imu_to_pitch,
     pitch_from_gravity,
@@ -20,6 +19,11 @@ from Balance_Car_RL.car.estimation import (
 
 G = 9.80665
 DT = 0.02
+
+
+def gravity_from_accel(accel: torch.Tensor) -> torch.Tensor:
+    """Gravity direction from the accelerometer alone (valid at rest): the reference the filter is compared with."""
+    return -accel / accel.norm(dim=-1, keepdim=True).clamp_min(1e-6)
 
 
 def test_ros_and_sim_share_the_constants():
@@ -33,7 +37,7 @@ def test_mount_is_a_rotation():
 
 
 def test_imu_quaternion_matches_the_rotation_matrix():
-    """The simulated IMU sensor is posed with ``IMU_QUAT_XYZW`` (``rl_control/common.py``); the filter rotates with
+    """The simulated IMU sensor is posed with ``IMU_QUAT_XYZW`` (``rl_control/car_env_cfg.py``); the filter rotates with
     ``IMU_R_CAR_FROM_IMU`` (this file and ``estimator.py``). ``tools/build_balboa_urdf.py`` writes both from the same
     rotation, but nothing previously checked they still agree -- a regenerated ``imu_mount.json`` with a different
     quaternion convention, or one of the two edited by hand, would otherwise train and deploy on two different

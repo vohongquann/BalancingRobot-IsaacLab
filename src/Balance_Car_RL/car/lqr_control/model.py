@@ -1,11 +1,6 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
-
 """Linearized wheeled inverted pendulum built from the same numbers as the simulation (URDF + motor constants).
 
-Derivation: ``docs/03-dynamics.md``.
+Derivation: ``guide/03_dynamics.md``.
 
 Coordinates: wheel angle ``psi`` (absolute, positive rolls forward) and body pitch ``theta`` (positive leans forward).
 The joint velocity Isaac Lab reports is relative to the body, ``q_dot_joint = psi_dot - theta_dot``.

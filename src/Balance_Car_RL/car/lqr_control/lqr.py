@@ -1,11 +1,6 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
-
 """Discrete LQR balance controller on the state ``[pitch, pitch rate, wheel speed]``.
 
-Discretization: ``docs/03-dynamics.md``; Riccati solution: ``docs/05-controllers.md``.
+Discretization: ``guide/03_dynamics.md``; Riccati solution: ``guide/05_controllers.md``.
 """
 
 from __future__ import annotations

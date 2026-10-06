@@ -1,7 +1,10 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
+"""Rewards of the car tasks: upright, wheel and turn speed, and the error to the command of the cascade stages.
+
+Written like Drone_RL's rewards and Isaac Lab's ``track_lin_vel_xy_exp``: the robot is read through Isaac Lab
+(``projected_gravity``, ``base_lin_vel``, ``joint_vel``). The ``_exp`` terms are ``exp(-error^2 / std^2)``: 1 on the
+command, 0 far from it; ``speed_error_l1`` keeps a slope where the kernel is flat. The command comes from
+``commands.ScalarCommand``.
+"""
 
 from __future__ import annotations
 
@@ -9,10 +12,10 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import SceneEntityCfg
 
 if TYPE_CHECKING:
-    from isaaclab.assets import Articulation
     from isaaclab.envs import ManagerBasedRLEnv
 
 
@@ -21,39 +24,46 @@ def upright_exp(
     std: float,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),  # noqa: B008
 ) -> torch.Tensor:
-    """Reward in (0, 1] for keeping the body upright: exp(-(tilt / std)^2). See ``docs/04-training.md``.
-
-    Uses the horizontal components of gravity in the body frame, i.e. sin(tilt), so roll and pitch
-    both count.
-    """
-    asset: Articulation = env.scene[asset_cfg.name]
-    tilt_sq = torch.sum(torch.square(asset.data.projected_gravity_b.torch[:, :2]), dim=1)
-    return torch.exp(-tilt_sq / std**2)
+    """Body upright: ``exp(-sin^2(tilt) / std^2)``. The horizontal components of gravity in the body frame are
+    sin(tilt), so roll and pitch both count. See ``guide/04_training.md``."""
+    return torch.exp(-isaac_mdp.projected_gravity(env, asset_cfg)[:, :2].square().sum(-1) / std**2)
 
 
 def wheel_vel_l2(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-    """Squared wheel speed [rad^2/s^2], discourages the car from driving away while balancing."""
-    asset: Articulation = env.scene[asset_cfg.name]
-    return torch.sum(torch.square(asset.data.joint_vel.torch[:, asset_cfg.joint_ids]), dim=1)
+    """Squared wheel speed [rad^2/s^2]: discourages the car from driving away while balancing."""
+    return isaac_mdp.joint_vel(env, asset_cfg).square().sum(-1)
 
 
-def pitch_track_exp(env: ManagerBasedRLEnv, command_name: str, std: float) -> torch.Tensor:
-    """Reward in (0, 1] for holding the commanded pitch: exp(-((pitch - target) / std)^2)."""
-    asset: Articulation = env.scene["robot"]
-    g_b = asset.data.projected_gravity_b.torch
-    pitch = torch.atan2(g_b[:, 0], -g_b[:, 2])
-    error = pitch - env.command_manager.get_command(command_name)[:, 0]
-    return torch.exp(-torch.square(error) / std**2)
+def yaw_rate_l2(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Squared turn rate about the body z axis [rad^2/s^2]: the car has no reason to spin, but two independent wheel
+    torques can make it (``ang_vel_xy_l2`` of Isaac Lab only counts roll and pitch)."""
+    return isaac_mdp.base_ang_vel(env)[:, 2].square()
 
 
-def speed_track_exp(env: ManagerBasedRLEnv, command_name: str, std: float) -> torch.Tensor:
-    """Reward in (0, 1] for tracking the commanded forward speed: exp(-((v - target) / std)^2), v in the body frame."""
-    asset: Articulation = env.scene["robot"]
-    error = asset.data.root_lin_vel_b.torch[:, 0] - env.command_manager.get_command(command_name)[:, 0]
-    return torch.exp(-torch.square(error) / std**2)
+# ── Cascade stages ──────────────────────────────────────────────────────────────────────
+# ``command_name``: the command term of the stage in training (``target``).
 
 
-def speed_error_l1(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
-    """Absolute forward-speed error [m/s]: dense, the kernel of ``speed_track_exp`` is flat far from the target."""
-    asset: Articulation = env.scene["robot"]
-    return torch.abs(asset.data.root_lin_vel_b.torch[:, 0] - env.command_manager.get_command(command_name)[:, 0])
+def body_pitch(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Pitch [rad] of the body, positive leaning forward, from the gravity direction in the body frame."""
+    gravity = isaac_mdp.projected_gravity(env)
+    return torch.atan2(gravity[:, 0], -gravity[:, 2])
+
+
+def pitch_error_exp(env: ManagerBasedRLEnv, std: float, command_name: str = "target") -> torch.Tensor:
+    """Pitch against the commanded one (pitch stage)."""
+    command = env.command_manager.get_command(command_name)
+    return torch.exp(-(body_pitch(env) - command[:, 0]).square() / std**2)
+
+
+def speed_error_exp(env: ManagerBasedRLEnv, std: float, command_name: str = "target") -> torch.Tensor:
+    """Forward speed (body frame) against the commanded one (velocity stage)."""
+    command = env.command_manager.get_command(command_name)
+    return torch.exp(-(isaac_mdp.base_lin_vel(env)[:, 0] - command[:, 0]).square() / std**2)
+
+
+def speed_error_l1(env: ManagerBasedRLEnv, command_name: str = "target") -> torch.Tensor:
+    """Absolute forward-speed error [m/s] (velocity stage): dense, the kernel of ``speed_error_exp`` is flat far from
+    the command."""
+    command = env.command_manager.get_command(command_name)
+    return (isaac_mdp.base_lin_vel(env)[:, 0] - command[:, 0]).abs()

@@ -11,7 +11,8 @@ What this script fixes compared to the raw export:
      come from src/Balance_Car_RL/car/car_cfg.py: nominal estimates spread over the CAD volume; replace them with the
      weighed values of the real robot and rerun.
   3. Wheel joints: both axes point along +y, so a positive velocity drives the car forward on both sides.
-  4. Meshes: glTF (unsupported by the URDF importer, 100k+ triangles) -> decimated STL; collision uses primitives.
+  4. Meshes: glTF (unsupported by the URDF importer, 100k+ triangles) -> decimated STL; the body collides as one
+     convex hull of its parts (meshes/body_collision.stl), the wheels as cylinders.
   5. The export double-counts a -19.86 mm offset on the board and buzzer meshes; it is removed here.
   6. imu_mount.json: pose of the IMU (control board axes) in the car frame, for the IMU sensor of the simulation.
 
@@ -44,9 +45,10 @@ MESH_TRIANGLES = {
     "wheel_black__Body_Move_Copy1": 3000,
 }
 EXPORT_OFFSET_BUG_LINK = "bal01a01__1_"
-COLLISION_THICKNESS_M = {"chassis__NONE": 0.03}
-"""Hand-tuned thickness [m] (CAD z axis) of a collision box, instead of the 0.04741 m bounding box. It was edited
-by hand in balboa.urdf; kept here so that a rebuild does not undo it."""
+COLLISION_PARTS = ("chassis__NONE", "battery_cover__Boss_Extrude_logo", "bal01a01__bal01a01")
+"""Parts whose convex hull is the collision shape of the body (the buzzer is a few millimetres and is left out)."""
+COLLISION_TRIANGLES = 200
+"""Triangles of the collision hull (PhysX cooks a convex hull of at most 255 vertices)."""
 
 RX_M90 = R.from_euler("x", -np.pi / 2).as_matrix()  # wheel link frame: local z -> +y of the car
 
@@ -172,16 +174,14 @@ def main() -> None:
         ET.SubElement(ET.SubElement(vis, "geometry"), "mesh", filename=f"meshes/{stl}")
         mat = ET.SubElement(vis, "material", name=stl[:-4])
         ET.SubElement(mat, "color", rgba=colors[name])
-    # collision: oriented boxes for the three big parts, expressed in the car frame
-    for name in ("chassis__NONE", "battery_cover__Boss_Extrude_logo", "bal01a01__bal01a01"):
-        lo, hi = base_meshes[name].bounds
-        centre = M @ ((lo + hi) / 2 - axle)
-        size = hi - lo
-        if name in COLLISION_THICKNESS_M:
-            size[2] = COLLISION_THICKNESS_M[name]
-        col = ET.SubElement(base, "collision")
-        ET.SubElement(col, "origin", xyz=_fmt(centre), rpy=_fmt(R.from_matrix(M).as_euler("xyz")))
-        ET.SubElement(ET.SubElement(col, "geometry"), "box", size=_fmt(size))
+    # collision: ONE convex hull of the three big parts, in the car frame. It touches the ground exactly where the
+    # visual mesh does (the lowest point of the hull is the lowest point of the parts), unlike the boxes it replaces:
+    # three overlapping bounding boxes, one of them hand-thinned, with 16 % of the chassis outside it.
+    hull = trimesh.util.concatenate([car[k] for k in COLLISION_PARTS]).convex_hull
+    _decimate(hull, COLLISION_TRIANGLES).export(OUT / "meshes" / "body_collision.stl")
+    col = ET.SubElement(base, "collision")
+    ET.SubElement(col, "origin", xyz="0 0 0", rpy="0 0 0")
+    ET.SubElement(ET.SubElement(col, "geometry"), "mesh", filename="meshes/body_collision.stl")
 
     wheel_r = float(np.mean([m.extents[1:].max() / 2 for m in wheel_meshes.values()]))
     wheel_w = float(np.mean([m.extents[0] for m in wheel_meshes.values()]))
@@ -223,6 +223,8 @@ def main() -> None:
         ET.SubElement(joint, "child", link=name)
     ET.indent(robot)
     ET.ElementTree(robot).write(OUT / "balboa.urdf", encoding="utf-8", xml_declaration=True)
+    with open(OUT / "balboa.urdf", "a") as urdf:  # end the file with a newline (pre-commit end-of-file-fixer)
+        urdf.write("\n")
 
     # IMU mount: the control board carries the IMU, so its axes are the board (CAD) axes, tilted with the chassis
     lo, hi = base_meshes["bal01a01__bal01a01"].bounds

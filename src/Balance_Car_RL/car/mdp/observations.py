@@ -1,7 +1,7 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
+"""Observation terms: what the real robot can measure, a raw IMU (``ImuPitchAndRate``) and the wheel encoders
+(``wheel_speed_estimate``). Isaac Lab's ``joint_vel_rel``, ``last_action`` and ``generated_commands`` complete the
+vectors.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ from Balance_Car_RL.car.estimation import imu_to_pitch, pitch_from_gravity
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from isaaclab.assets import Articulation
     from isaaclab.envs import ManagerBasedRLEnv
     from isaaclab.managers import ObservationTermCfg
 
@@ -27,7 +26,7 @@ class ImuPitchAndRate(ManagerTermBase):
 
     The IMU sensor gives the accelerometer (specific force) and gyroscope in the IMU frame (the control board axes).
     Noise and a per-episode offset are added with the LSM6DS33 numbers of ``car_cfg.py``; a complementary filter turns
-    the samples into the gravity direction (``estimation.py``, ``docs/02-sensing.md``), which is rotated
+    the samples into the gravity direction (``estimation.py``, ``guide/02_sensing.md``), which is rotated
     to the car frame with the known mounting. Output shape (num_envs, 2): ``[pitch, pitch_rate]``.
 
     The accelerometer is first corrected for the acceleration of the axle, which the encoders give (``estimation.py``,
@@ -115,12 +114,20 @@ class ImuPitchAndRate(ManagerTermBase):
         return torch.stack([pitch, pitch_rate], dim=1)
 
 
-def wheel_speed_estimate(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:  # noqa: B008
-    """Forward speed of the axle [m/s] from the encoders and the IMU pitch rate, shape (num_envs, 1).
+def axle_speed(env: ManagerBasedRLEnv, joint_ids) -> torch.Tensor:
+    """Forward speed of the axle [m/s] from the encoders and the IMU pitch rate, shape (num_envs,).
 
     ``v = r (mean wheel speed + pitch rate)``: the encoders measure the wheels relative to the body, the pitch rate
-    (``ImuPitchAndRate``, computed before this term in the same group) turns it into the absolute wheel speed.
+    (``ImuPitchAndRate``, computed before this term in the same group) turns it into the absolute wheel speed. What the
+    robot knows of its speed: the simulator's own velocity is not available on the real car.
     """
-    asset: Articulation = env.scene[asset_cfg.name]
-    wheel = asset.data.joint_vel.torch[:, asset_cfg.joint_ids].mean(dim=1)
-    return (car_cfg.WHEEL_RADIUS_M * (wheel + env.car_imu.cache[:, 1])).unsqueeze(-1)
+    car_imu = getattr(env, "car_imu", None)
+    if car_imu is None:
+        raise RuntimeError("no ImuPitchAndRate term in the observations: the speed estimate needs its pitch rate")
+    wheel = env.scene["robot"].data.joint_vel.torch[:, joint_ids].mean(dim=1)
+    return car_cfg.WHEEL_RADIUS_M * (wheel + car_imu.cache[:, 1])
+
+
+def wheel_speed_estimate(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:  # noqa: B008
+    """``axle_speed`` of the wheels of ``asset_cfg``, shape (num_envs, 1)."""
+    return axle_speed(env, asset_cfg.joint_ids).unsqueeze(-1)

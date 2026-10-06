@@ -1,10 +1,6 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
-
-"""Cascaded PID balance controller."""
+"""Cascaded PID balance controller: ``pid.py`` (plain PID, as in Drone_RL) and ``cascade_pid.py`` (the two loops)."""
 
 from .cascade_pid import CascadePID
+from .pid import PID
 
-__all__ = ["CascadePID"]
+__all__ = ["PID", "CascadePID"]

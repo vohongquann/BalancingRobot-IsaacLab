@@ -15,7 +15,7 @@ For every stage the script does the same five things, in this order, and stops a
 2. play the last checkpoint with ``isaaclab play``: records the demo video and exports ``policy.pt`` / ``policy.onnx``;
 3. evaluate it headless (``scripts/evaluate.py``) against the stage's pass criteria;
 4. freeze it: copy the exported policy to ``src/Balance_Car_RL/car/rl_control/frozen/<stage>/`` with a ``meta.json``;
-5. copy the videos (mp4 and gif) and the training curve to ``docs/media/``.
+5. copy the videos (mp4 and gif) and the training curve to ``guide/media/``.
 
 A stage that fails its evaluation is not frozen, so a later stage never builds on a bad policy. ``isaaclab train``
 returns exit code 0 even when it crashes; success means ``Training time`` in its output.
@@ -34,11 +34,12 @@ import signal
 import subprocess
 import sys
 
-from Balance_Car_RL.car.mdp.actions import contract_fingerprint  # editable install, like scripts/evaluate.py
+# editable install, like scripts/evaluate.py
+from Balance_Car_RL.car.mdp.actions.frozen_policy import contract_fingerprint, file_sha256
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FROZEN = ROOT / "src/Balance_Car_RL/car/rl_control/frozen"
-MEDIA = ROOT / "docs/media"
+MEDIA = ROOT / "guide/media"
 LOGS = ROOT / "logs/rsl_rl"
 PLOT = ROOT / "src/Balance_Car_RL/car/tools/plot_training.py"
 
@@ -131,18 +132,32 @@ def onnx_single_file(src: pathlib.Path, dst: pathlib.Path) -> None:
     onnx.save_model(onnx.load(str(src), load_external_data=True), str(dst), save_as_external_data=False)
 
 
+def stale_dependents(frozen_stage: str) -> list[str]:
+    """Frozen stages trained on another policy of ``frozen_stage`` than the one now in ``frozen/`` (their ``meta.json``
+    records the hash of the policy they were trained on)."""
+    current = file_sha256(FROZEN / frozen_stage / "policy.pt")
+    stale = []
+    for other in STAGES.values():
+        meta = FROZEN / other.name / "meta.json"
+        if frozen_stage in other.needs and meta.is_file():
+            trained_on = json.loads(meta.read_text()).get("needs_sha256", {}).get(frozen_stage)
+            if trained_on != current:
+                stale.append(other.name)
+    return stale
+
+
 def do_stage(stage: Stage, args: argparse.Namespace) -> None:
     for needed in stage.needs:
         if not (FROZEN / needed / "policy.pt").is_file():
             sys.exit(f"Stage '{stage.name}' needs the frozen '{needed}' policy: run --stages {needed} first.")
         needed_meta = FROZEN / needed / "meta.json"
         expected = json.loads(needed_meta.read_text()).get("contract_sha256") if needed_meta.is_file() else None
-        if expected and expected != contract_fingerprint(needed):
-            print(
-                f"warning: frozen '{needed}' policy looks stale (its observation/action contract changed since it "
-                f"was frozen); '{stage.name}' would train on top of it anyway. Consider `--stages {needed} "
-                f"{stage.name}` to refreeze '{needed}' first."
-            )
+        if expected != contract_fingerprint(needed):
+            why = "its contract changed since it was frozen" if expected else "no contract recorded"
+            message = f"frozen '{needed}' policy is stale ({why}): refreeze it with `--stages {needed} {stage.name}`."
+            if not args.allow_stale:
+                sys.exit(f"Stage '{stage.name}': {message} (or pass --allow-stale)")
+            print(f"warning: {message} '{stage.name}' trains on it anyway.")
     print(f"\n===== stage '{stage.name}' ({stage.task}) =====", flush=True)
     logdir = ROOT / "logs/cascade"
     video = ["--video", "--video_length", str(args.video_length), "--video_interval", str(args.video_interval)]
@@ -234,10 +249,14 @@ def do_stage(stage: Stage, args: argparse.Namespace) -> None:
         "evaluation": stats,
     }
     fingerprint = contract_fingerprint(stage.name)
-    if fingerprint:  # only stages with a known contract (mdp/actions.py::_CONTRACT_FILES) get one
+    if fingerprint:  # only stages with a known contract (mdp/actions/frozen_policy.py::_CONTRACT_FILES) get one
         meta["contract_sha256"] = fingerprint
+    if stage.needs:  # which frozen policies this one was trained on: retraining one of them makes this one stale
+        meta["needs_sha256"] = {needed: file_sha256(FROZEN / needed / "policy.pt") for needed in stage.needs}
     (target / "meta.json").write_text(json.dumps(meta, indent=2, default=str) + "\n")
     print(f"frozen: {target.relative_to(ROOT)}")
+    for other in stale_dependents(stage.name):
+        print(f"warning: frozen '{other}' was trained on another '{stage.name}' policy: retrain it (--stages {other}).")
 
     # 5. media
     MEDIA.mkdir(parents=True, exist_ok=True)
@@ -268,6 +287,7 @@ def main() -> None:
     parser.add_argument(
         "--reuse-latest", action="store_true", help="Skip training: evaluate and freeze the newest run."
     )
+    parser.add_argument("--allow-stale", action="store_true", help="Train on a frozen policy that looks stale.")
     parser.add_argument("--dry-run", action="store_true", help="Print the plan and exit.")
     args = parser.parse_args()
 

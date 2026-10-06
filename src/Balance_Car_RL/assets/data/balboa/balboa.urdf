@@ -44,21 +44,9 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="-0.00139714 0 0.0245687" rpy="1.39698 2.22045e-16 -1.5708" />
+      <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <box size="0.107 0.104114 0.03" />
-      </geometry>
-    </collision>
-    <collision>
-      <origin xyz="0.00592705 5.85296e-15 0.0228968" rpy="1.39698 2.22045e-16 -1.5708" />
-      <geometry>
-        <box size="0.0597002 0.103054 0.0208003" />
-      </geometry>
-    </collision>
-    <collision>
-      <origin xyz="-0.0102072 0.00074607 0.0257756" rpy="1.39698 2.22045e-16 -1.5708" />
-      <geometry>
-        <box size="0.0690562 0.10922 0.00957814" />
+        <mesh filename="meshes/body_collision.stl" />
       </geometry>
     </collision>
   </link>

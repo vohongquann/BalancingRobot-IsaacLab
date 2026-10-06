@@ -31,17 +31,17 @@ class BalancePolicy:
     ) -> np.ndarray:
         """Return the wheel torques [left, right] in N m for one control step.
 
-        The raw action is clipped to [-1, 1] (the motor cannot deliver more than its stall torque); the clipped
-        value is not fed back as ``last_action``, matching the training observation, which uses the raw action.
+        The action is clipped to [-1, 1] and the clipped value is fed back as ``last_action``, matching training
+        (``clip_actions = 1.0`` in ``car_ppo_cfg.py``).
         """
         obs = np.array(
             [[pitch, pitch_rate, wheel_vel[0], wheel_vel[1],
               self._last_action[0], self._last_action[1]]],
             dtype=np.float32,
         )
-        action = self._session.run(None, {self._input_name: obs})[0][0]
+        action = np.clip(self._session.run(None, {self._input_name: obs})[0][0], -1.0, 1.0)
         self._last_action = action.astype(np.float32)
-        return np.clip(action, -1.0, 1.0) * TORQUE_SCALE_NM
+        return action * TORQUE_SCALE_NM
 
     def reset(self) -> None:
         """Clear the recurrent action input, e.g. after the car has been picked up."""

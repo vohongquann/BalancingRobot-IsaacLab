@@ -1,11 +1,6 @@
-# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
-
 """Gravity direction from a raw IMU (accelerometer + gyroscope) with a complementary filter.
 
-``docs/02-sensing.md``. The same equations run in the simulation (this module, torch) and on the robot
+``guide/02_sensing.md``. The same equations run in the simulation (this module, torch) and on the robot
 (``ros/src/car_bridge/car_bridge/estimator.py``, numpy); ``tests/test_estimation.py`` checks that they agree.
 """
 
@@ -45,11 +40,6 @@ def compensate_acceleration(accel: torch.Tensor, a_axle: torch.Tensor, r_car_fro
         r_car_from_imu: Rotation with ``v_car = R v_imu``, shape (3, 3).
     """
     return accel - a_axle.unsqueeze(-1) * r_car_from_imu[0]
-
-
-def gravity_from_accel(accel: torch.Tensor) -> torch.Tensor:
-    """Gravity direction from the accelerometer alone (valid at rest), unit vectors, shape (N, 3)."""
-    return -accel / accel.norm(dim=-1, keepdim=True).clamp_min(1e-6)
 
 
 def pitch_from_gravity(g_car: torch.Tensor) -> torch.Tensor:

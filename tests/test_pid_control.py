@@ -26,6 +26,6 @@ def test_pid_reset_clears_the_integral():
     pid = CascadePID(ki=1.0)
     obs = torch.tensor([[0.1, 0.0, 0.0, 0.0, 0.0, 0.0], [0.1, 0.0, 0.0, 0.0, 0.0, 0.0]])
     pid.act(obs)
-    assert torch.all(pid._integral > 0.0)
+    assert torch.all(pid.pitch.integral > 0.0)
     pid.reset(torch.tensor([0]))
-    assert pid._integral[0] == 0.0 and pid._integral[1] > 0.0
+    assert pid.pitch.integral[0] == 0.0 and pid.pitch.integral[1] > 0.0

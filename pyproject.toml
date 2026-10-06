@@ -126,7 +126,6 @@ isaaclab = ["isaaclab", "isaaclab_newton", "isaaclab_ov", "isaaclab_physx"]
 
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401", "F403"]
-"**/__init__.pyi" = ["F401", "F403"]
 "scripts/**/*.py" = ["E402"]
 
 [tool.ruff.format]
@@ -149,6 +148,8 @@ markers = [
 
 [tool.codespell]
 skip = "*.usd,*.usda,*.usdc,*.json,*.onnx,*.pt,*.mp4,*.data,uv.lock,logs"
+# Vietnamese words without accents in car/tools/summarize_training_run.py (copied from Drone_RL)
+ignore-words-list = "ket,mot,som,thay,thi,tich,tru"
 
 [[tool.uv.index]]
 url = "https://pypi.nvidia.com"

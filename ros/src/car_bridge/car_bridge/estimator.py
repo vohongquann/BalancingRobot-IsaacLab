@@ -2,7 +2,7 @@
 Pitch and pitch rate from a raw IMU (accelerometer + gyroscope) with a complementary filter.
 
 The same equations as ``Balance_Car_RL/car/estimation.py`` (torch, used in the simulation);
-``tests/test_estimation.py`` checks that the two agree. ``docs/02-sensing.md``.
+``tests/test_estimation.py`` checks that the two agree. ``guide/02_sensing.md``.
 """
 
 import numpy as np
@@ -49,8 +49,8 @@ class GravityEstimator:
         """One step; returns ``(pitch, pitch_rate)``.
 
         ``gyro`` [rad/s] and ``accel`` [m/s^2] are 3-vectors in the IMU frame; ``wheel_speed`` [rad/s] is the mean
-        wheel joint speed from the encoders (relative to the body). The axle acceleration derived from it is removed from
-        the accelerometer, so that driving is not taken for a tilt (``docs/02-sensing.md``).
+        wheel joint speed from the encoders (relative to the body). The axle acceleration derived from it is removed
+        from the accelerometer, so that driving is not taken for a tilt (``guide/02_sensing.md``).
         """
         gyro = np.asarray(gyro, dtype=float)
         accel = np.asarray(accel, dtype=float)

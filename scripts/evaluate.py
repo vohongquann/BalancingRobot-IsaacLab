@@ -8,7 +8,7 @@
 The controller is a trained RSL-RL checkpoint (default) or one of the classical baselines (``lqr``, ``pid``), all run on
 the same environment, pushes and motor model. Usage (same flags as ``isaaclab play``, plus the ones below):
 
-    python scripts/evaluate.py --task BalanceCar-Upright-v0 --num_envs 256 --eval_steps 1500
+    python scripts/evaluate.py --task BalanceCar-Upright-v0 --num_envs 256 --checkpoint <run>/model_299.pt
     python scripts/evaluate.py --task BalanceCar-Upright-v0 --num_envs 256 --controller lqr
 
 It reuses the private helpers of Isaac Lab's ``play_rsl_rl`` backend, so it is tied to the Isaac Lab version this
@@ -89,6 +89,11 @@ def main(argv: list[str]) -> int:
             f"--controller {own.controller} expects the Upright observation (6 values) and action (2 wheels); "
             f"{args_cli.task} does not match that layout."
         )
+    if own.controller == "policy" and not args_cli.checkpoint:
+        sys.exit(
+            "--checkpoint <path to model_N.pt> is required: without it the newest run of the task is loaded, which can "
+            "be one that never trained (a fresh model_0.pt falls every episode)."
+        )
     installed_version = check_rsl_rl_version()
     with startup_screen(args_cli, num_stages=3) as screen:
         env_cfg, agent_cfg = resolve_task_config(args_cli.task, args_cli.agent, play_mode=not args_cli.train_env_cfg)
@@ -130,7 +135,7 @@ def main(argv: list[str]) -> int:
 
             robot = env.unwrapped.scene["robot"]
             n = env.unwrapped.num_envs
-            pitch_sq, est_sq, wheel_abs, torque_abs, speed_abs, track_sq, count = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0
+            pitch_sq, est_sq, yaw_sq, wheel_abs, torque_abs, speed_abs, track_sq, count = [0.0] * 7 + [0]
             errors: list[torch.Tensor] = []
             since = torch.zeros(n, device=env.unwrapped.device)
             prev_cmd = None
@@ -160,6 +165,7 @@ def main(argv: list[str]) -> int:
                     if step >= 50:  # skip the randomized start
                         pitch_sq += float((pitch**2).mean())
                         est_sq += float(((obs["policy"][:, 0] - pitch) ** 2).mean())  # IMU estimate vs truth
+                        yaw_sq += float((robot.data.root_ang_vel_b.torch[:, 2] ** 2).mean())
                         wheel_abs += float(robot.data.joint_vel.torch.abs().mean())
                         torque_abs += float(robot.data.applied_torque.torch.abs().mean())
                         speed_abs += float(robot.data.root_lin_vel_b.torch[:, :2].norm(dim=1).mean())
@@ -191,6 +197,7 @@ def main(argv: list[str]) -> int:
                 "fall rate": falls / episodes,
                 "rms pitch [rad]": (pitch_sq / count) ** 0.5,
                 "pitch estimate RMS error [rad]": (est_sq / count) ** 0.5,
+                "RMS turn rate [rad/s]": (yaw_sq / count) ** 0.5,
                 "mean |wheel speed| [rad/s]": wheel_abs / count,
                 "mean |wheel torque| [N m]": torque_abs / count,
                 "mean planar speed [m/s]": speed_abs / count,
