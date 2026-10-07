@@ -1,0 +1,29 @@
+{
+  "stage": "pitch_gains",
+  "task": "BalanceCar-Pitch-Gains-v0",
+  "run": "logs/rsl_rl/balance_car_pitch_gains/2026-10-06_13-11-39",
+  "checkpoint": "model_299.pt",
+  "date": "2026-10-06T13:17:57",
+  "needs": [],
+  "evaluation": {
+    "controller": "policy logs/rsl_rl/balance_car_pitch_gains/2026-10-06_13-11-39/model_299.pt",
+    "episodes finished": 768,
+    "fall rate": 0.0,
+    "rms pitch [rad]": 0.04420181687028495,
+    "pitch estimate RMS error [rad]": 0.01229601086640282,
+    "RMS turn rate [rad/s]": 0.021934380067333222,
+    "mean |wheel speed| [rad/s]": 5.692774549270498,
+    "mean |wheel torque| [N m]": 0.006294071692812803,
+    "mean planar speed [m/s]": 0.22587222509086133,
+    "max pitch seen [rad]": 0.24940796196460724,
+    "RMS pitch tracking error [rad]": 0.016874478564303724,
+    "settled RMS pitch error, 0.5 s after a command change [rad]": 0.013476002057280759,
+    "median / 90th percentile |pitch error| [rad]": [
+      0.009152501821517944,
+      0.019852034747600555
+    ],
+    "pass": true
+  },
+  "contract_sha256": "06432cb11f5eeed08a3f63e4adadf7dc4a32987a7bfbb7d195a5f1aae22f4d7d",
+  "contract_note": "2026-10-07: hash renewed by hand after gains_env_cfg.py / gains_ppo_cfg.py took over the speed-layer env and PPO settings; the env and agent configs of both gain tasks were compared with to_dict() before and after: identical | 2026-10-07: hash renewed by hand after rewards.wheel_vel_l2 was replaced by Isaac Lab's identical joint_vel_l2; task configs compared with to_dict: only the function name differs 2026-10-07 evening: renewed by hand after refactors with the same behaviour (observations.py keeps the gyro yaw rate of the same sample, rewards.body_pitch uses estimation.pitch_from_gravity, cascade_pid.both_wheels/upright_state, gain_action without pid_below); re-evaluated pitch_gains and velocity_gains: every statistic identical."
+}

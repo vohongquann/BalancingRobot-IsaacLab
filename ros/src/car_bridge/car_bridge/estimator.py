@@ -35,6 +35,7 @@ class GravityEstimator:
         self._alpha_a = ACCEL_COMP_TAU_S / (ACCEL_COMP_TAU_S + dt)
         self._dt = dt
         self._r = np.asarray(rotation, dtype=float)
+        self.rotation = self._r  # v_car = rotation @ v_imu
         self._g = None
         self._speed_prev = None
         self._a_lp = 0.0

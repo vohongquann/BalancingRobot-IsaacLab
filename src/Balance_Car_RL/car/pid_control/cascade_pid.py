@@ -12,6 +12,41 @@ import torch
 from Balance_Car_RL.car.car_cfg import WHEEL_STALL_TORQUE_NM
 from Balance_Car_RL.car.pid_control.pid import PID
 
+PITCH_KP = 1.6
+"""Pitch loop P gain [N m/rad]."""
+PITCH_KI = 0.05
+"""Pitch loop I gain [N m/(rad s)]."""
+PITCH_KD = 0.05
+"""Pitch loop D gain on the measured pitch rate [N m s/rad]."""
+PITCH_INT_LIMIT = 0.2
+"""Limit of the integral of the pitch error [rad s]."""
+SPEED_KV = 0.015
+"""Speed loop P gain [rad/(rad/s)]."""
+DT_S = 0.02
+"""Control period [s]: the policy rate of the environments, 50 Hz."""
+
+
+def upright_state(obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """``(pitch, pitch rate, absolute wheel speed)`` from the observation of the upright task ``[pitch, pitch_rate,
+    wheel_vel_L, wheel_vel_R, ...]``: the encoders are relative to the body, so the pitch rate is added."""
+    pitch, pitch_rate = obs[:, 0], obs[:, 1]
+    return pitch, pitch_rate, 0.5 * (obs[:, 2] + obs[:, 3]) + pitch_rate
+
+
+def both_wheels(total_torque: torch.Tensor) -> torch.Tensor:
+    """Total wheel torque [N m] (N,) -> the same normalized action on both wheels (N, 2)."""
+    action = torch.clamp(total_torque / (2.0 * WHEEL_STALL_TORQUE_NM), -1.0, 1.0)
+    return action.unsqueeze(1).repeat(1, 2)
+
+
+def wheel_action(
+    pitch_loop: PID, kd, pitch: torch.Tensor, pitch_rate: torch.Tensor, target: torch.Tensor, dt: float
+) -> torch.Tensor:
+    """The pitch loop of the cascade: ``pitch_loop`` (PI) on ``pitch - target``, plus ``kd`` times the measured pitch
+    rate, as a normalized torque on both wheels, shape (N, 2). Gains of ``pitch_loop`` and ``kd`` are floats or
+    tensors of shape (N,); :class:`CascadePID` and the gain tasks (``mdp/actions/gain_action.py``) share it."""
+    return both_wheels(pitch_loop.update(pitch - target, dt) + kd * pitch_rate)
+
 
 class CascadePID:
     """Outer: P on wheel speed. Inner: PI on pitch, plus the measured pitch rate as the D term.
@@ -27,12 +62,12 @@ class CascadePID:
 
     def __init__(
         self,
-        kp: float = 1.6,
-        ki: float = 0.05,
-        kd: float = 0.05,
-        kv: float = 0.015,
-        dt: float = 0.02,
-        i_limit: float = 0.2,
+        kp: float = PITCH_KP,
+        ki: float = PITCH_KI,
+        kd: float = PITCH_KD,
+        kv: float = SPEED_KV,
+        dt: float = DT_S,
+        i_limit: float = PITCH_INT_LIMIT,
     ):
         self.kd, self.dt = kd, dt
         self.speed = PID(kp=kv)  # wheel speed error -> pitch target [rad]
@@ -44,9 +79,9 @@ class CascadePID:
 
     def act(self, obs: torch.Tensor) -> torch.Tensor:
         """``obs`` is ``[pitch, pitch_rate, wheel_vel_L, wheel_vel_R, ...]``; returns actions (N, 2)."""
-        pitch, pitch_rate = obs[:, 0], obs[:, 1]
-        psi_dot = 0.5 * (obs[:, 2] + obs[:, 3]) + pitch_rate  # joint speed is relative to the body
-        pitch_target = self.speed.update(0.0 - psi_dot, self.dt)
-        total_torque = self.pitch.update(pitch - pitch_target, self.dt) + self.kd * pitch_rate
-        action = torch.clamp(total_torque / (2.0 * WHEEL_STALL_TORQUE_NM), -1.0, 1.0)
-        return action.unsqueeze(1).repeat(1, 2)
+        return self.step(*upright_state(obs))
+
+    def step(self, pitch, pitch_rate, psi_dot, psi_dot_target=0.0) -> torch.Tensor:
+        """Balance at the absolute wheel speed ``psi_dot_target`` [rad/s] (0: stand still); actions (N, 2)."""
+        pitch_target = self.speed.update(psi_dot_target - psi_dot, self.dt)
+        return wheel_action(self.pitch, self.kd, pitch, pitch_rate, pitch_target, self.dt)

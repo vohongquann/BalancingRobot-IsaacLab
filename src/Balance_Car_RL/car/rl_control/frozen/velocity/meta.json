@@ -1,0 +1,58 @@
+{
+  "stage": "velocity",
+  "task": "BalanceCar-Velocity-v0",
+  "run": "logs/rsl_rl/balance_car_velocity/2026-10-07_19-49-52",
+  "checkpoint": "model_599.pt",
+  "date": "2026-10-07T20:19:16",
+  "needs": [],
+  "evaluation": {
+    "controller": "policy logs/rsl_rl/balance_car_velocity/2026-10-07_19-49-52/model_599.pt",
+    "episodes finished": 768,
+    "fall rate": 0.0,
+    "rms pitch [rad]": 0.0993991304074039,
+    "pitch estimate RMS error [rad]": 0.023874663773632124,
+    "RMS turn rate [rad/s]": 1.126501481576874,
+    "mean |wheel speed| [rad/s]": 4.859979673418505,
+    "mean |wheel torque| [N m]": 0.007221655847247818,
+    "mean planar speed [m/s]": 0.18057971100355016,
+    "max pitch seen [rad]": 0.5877563953399658,
+    "RMS speed tracking error [m/s]": 0.07385903534293276,
+    "settled RMS speed error, 1.5 s after a command change [m/s]": 0.04258888723434374,
+    "speed command +: mean command / mean reached [m/s]": [
+      0.20239437452267542,
+      0.1889463230839574
+    ],
+    "speed command -: mean command / mean reached [m/s]": [
+      -0.20661973294433258,
+      -0.19098330170910868
+    ],
+    "median / 90th percentile |speed error| on the last step of a command [m/s]": [
+      0.01994355022907257,
+      0.04696293920278549
+    ],
+    "median / 90th percentile |speed error| [m/s]": [
+      0.021449744701385498,
+      0.07222207635641098
+    ],
+    "RMS turn tracking error [rad/s]": 0.1232593725537888,
+    "settled RMS turn error, 1.0 s after a command change [rad/s]": 0.10606426879328272,
+    "turn command +: mean command / mean reached [rad/s]": [
+      0.9936881922977728,
+      0.9823704386309785
+    ],
+    "turn command -: mean command / mean reached [rad/s]": [
+      -1.0095638161198834,
+      -0.9940541535667698
+    ],
+    "median / 90th percentile |turn error| on the last step of a command [rad/s]": [
+      0.05655360221862793,
+      0.13383549451828003
+    ],
+    "median / 90th percentile |turn error| [rad/s]": [
+      0.055071353912353516,
+      0.13678723573684692
+    ],
+    "pass": true
+  },
+  "contract_sha256": "31f1c9344e6ce05cb451f8faaf25ca2397de6d21abdb676fb32b1aa5eca6fad0"
+}

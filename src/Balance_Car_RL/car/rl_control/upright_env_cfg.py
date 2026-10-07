@@ -30,9 +30,13 @@ class UprightRewardsCfg(RewardsCfg):
         params={"std": 0.3},
     )
     wheel_vel = RewTerm(
-        func=mdp.wheel_vel_l2,
+        func=isaac_mdp.joint_vel_l2,  # squared wheel speed: the car should not drive away while balancing
         weight=-0.001,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_wheel_joint"])},
+    )
+    output_change = RewTerm(
+        func=isaac_mdp.action_rate_l2,  # five times the shared weight: after a push the torque chattered (4x LQR's)
+        weight=-0.05,
     )
 
 

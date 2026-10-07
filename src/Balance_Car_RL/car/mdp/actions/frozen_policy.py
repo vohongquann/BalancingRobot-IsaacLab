@@ -22,11 +22,18 @@ FROZEN_DIR = _CAR_DIR / "rl_control" / "frozen"
 """Where the frozen policies of the finished stages live: ``<stage>/policy.pt`` (TorchScript), ``policy.onnx`` and
 ``meta.json``."""
 
-STAGE_IO = {"pitch": (7, 2), "velocity": (5, 1)}
-"""Observation and action size of the policy of each stage (``rl_control/<stage>_env_cfg.py``)."""
+STAGE_IO = {
+    "velocity": (8, 2),
+    "position": (9, 2),
+    "pitch_gains": (8, 3),
+    "velocity_gains": (7, 3),
+    "position_gains": (13, 6),
+}
+"""Observation and action size of the policy of each stage (``rl_control/<stage>_env_cfg.py``; the gain stages are
+``rl_control/gains_env_cfg.py``, their action is the three PID gains)."""
 
 _CONTRACT_FILES: dict[str, tuple[pathlib.Path, ...]] = {
-    "pitch": (
+    "velocity": (
         # the robot: constants, model, mounting of the IMU
         _CAR_DIR / "car_cfg.py",
         _DATA_DIR / "balboa.urdf",
@@ -35,13 +42,38 @@ _CONTRACT_FILES: dict[str, tuple[pathlib.Path, ...]] = {
         # what the policy sees
         _CAR_DIR / "estimation.py",
         _CAR_DIR / "mdp" / "observations.py",
-        _CAR_DIR / "mdp" / "commands.py",
+        _CAR_DIR / "mdp" / "locomotion.py",
+        # what its output means
+        _CAR_DIR / "mdp" / "actions" / "wheel_action.py",
         # what it is trained on and for
         _CAR_DIR / "mdp" / "rewards.py",
         _CAR_DIR / "rl_control" / "car_env_cfg.py",
-        _CAR_DIR / "rl_control" / "pitch_env_cfg.py",
+        _CAR_DIR / "rl_control" / "velocity_env_cfg.py",
         _CAR_DIR / "rl_control" / "agents" / "car_ppo_cfg.py",
-        _CAR_DIR / "rl_control" / "agents" / "pitch_ppo_cfg.py",
+        _CAR_DIR / "rl_control" / "agents" / "velocity_ppo_cfg.py",
+        _CAR_DIR / "rl_control" / "agents" / "symmetry.py",
+    ),
+    "pitch_gains": (
+        # the robot and what the policy sees: those of the pitch stage
+        _CAR_DIR / "car_cfg.py",
+        _DATA_DIR / "balboa.urdf",
+        _DATA_DIR / "imu_mount.json",
+        _DATA_DIR / "meshes" / "body_collision.stl",
+        _CAR_DIR / "estimation.py",
+        _CAR_DIR / "mdp" / "observations.py",
+        _CAR_DIR / "mdp" / "commands.py",
+        _CAR_DIR / "mdp" / "rewards.py",
+        _CAR_DIR / "rl_control" / "car_env_cfg.py",
+        _CAR_DIR / "rl_control" / "pitch_env_cfg.py",
+        # what the gains mean: the PID they go into, and how
+        _CAR_DIR / "pid_control" / "pid.py",
+        _CAR_DIR / "pid_control" / "cascade_pid.py",
+        _CAR_DIR / "mdp" / "gains.py",
+        _CAR_DIR / "mdp" / "actions" / "gain_action.py",
+        # what it is trained on and for
+        _CAR_DIR / "rl_control" / "gains_env_cfg.py",
+        _CAR_DIR / "rl_control" / "agents" / "car_ppo_cfg.py",
+        _CAR_DIR / "rl_control" / "agents" / "gains_ppo_cfg.py",
     ),
 }
 """Source files that define each stage's observation/action contract and training, for :func:`contract_fingerprint`.

@@ -1,4 +1,4 @@
-"""Rewards of the car tasks: upright, wheel and turn speed, and the error to the command of the cascade stages.
+"""Rewards of the car tasks that Isaac Lab does not have: upright, turn speed, and the error to a scalar command.
 
 Written like Drone_RL's rewards and Isaac Lab's ``track_lin_vel_xy_exp``: the robot is read through Isaac Lab
 (``projected_gravity``, ``base_lin_vel``, ``joint_vel``). The ``_exp`` terms are ``exp(-error^2 / std^2)``: 1 on the
@@ -15,6 +15,8 @@ import torch
 from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import SceneEntityCfg
 
+from Balance_Car_RL.car.estimation import pitch_from_gravity
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
@@ -29,11 +31,6 @@ def upright_exp(
     return torch.exp(-isaac_mdp.projected_gravity(env, asset_cfg)[:, :2].square().sum(-1) / std**2)
 
 
-def wheel_vel_l2(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-    """Squared wheel speed [rad^2/s^2]: discourages the car from driving away while balancing."""
-    return isaac_mdp.joint_vel(env, asset_cfg).square().sum(-1)
-
-
 def yaw_rate_l2(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Squared turn rate about the body z axis [rad^2/s^2]: the car has no reason to spin, but two independent wheel
     torques can make it (``ang_vel_xy_l2`` of Isaac Lab only counts roll and pitch)."""
@@ -46,8 +43,7 @@ def yaw_rate_l2(env: ManagerBasedRLEnv) -> torch.Tensor:
 
 def body_pitch(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Pitch [rad] of the body, positive leaning forward, from the gravity direction in the body frame."""
-    gravity = isaac_mdp.projected_gravity(env)
-    return torch.atan2(gravity[:, 0], -gravity[:, 2])
+    return pitch_from_gravity(isaac_mdp.projected_gravity(env))
 
 
 def pitch_error_exp(env: ManagerBasedRLEnv, std: float, command_name: str = "target") -> torch.Tensor:

@@ -1,4 +1,5 @@
-"""Scalar command terms: a target pitch [rad] for the inner stage, a target forward speed [m/s] for the outer stage."""
+"""Scalar command terms of the gain cascade: a target pitch [rad] for the pitch layer, a target forward speed [m/s] for
+the speed layer."""
 
 from __future__ import annotations
 
@@ -24,8 +25,8 @@ class ScalarCommand(CommandTerm):
     With ``speed_guard`` set, the sign of the command is flipped whenever the car is faster than the guard and the
     command would speed it up further. A lean cannot be held forever (the wheels have a top speed), and the pitch
     commands of the outer stage never ask for that, so training does not ask for it either. The speed is the
-    simulator's: this term generates the training signal, it is not a controller (the outer stage's own guard,
-    ``FrozenPitchAction``, uses the speed estimate of the robot).
+    simulator's: this term generates the training signal, it is not a controller (the speed layer's own guard,
+    ``actions/pitch_action.py``, uses the speed estimate of the robot).
     """
 
     cfg: ScalarCommandCfg

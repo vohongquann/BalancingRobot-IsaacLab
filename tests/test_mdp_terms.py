@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from Balance_Car_RL.car import car_cfg
-from Balance_Car_RL.car.mdp.actions.pitch_action import FrozenPitchAction
+from Balance_Car_RL.car.mdp.actions.velocity_action import FrozenVelocityAction
 from Balance_Car_RL.car.mdp.commands import ScalarCommand
 from Balance_Car_RL.car.mdp.observations import axle_speed
 from Balance_Car_RL.car.mdp.rewards import yaw_rate_l2
@@ -28,12 +28,14 @@ def _robot(joint_vel, lin_vel=None, ang_vel=None):
     return _ns(data=data)
 
 
-def _env(joint_vel, pitch_rate=0.0, **robot_kwargs):
-    """Stub environment: a robot, the IMU term (only its ``cache`` is read) and the manager attributes."""
+def _env(joint_vel, pitch_rate=0.0, yaw_rate=0.0, **robot_kwargs):
+    """Stub environment: a robot, the IMU term (only its ``cache`` and ``yaw_rate`` are read) and the manager
+    attributes."""
     robot = _robot(joint_vel, **robot_kwargs)
     cache = torch.zeros(N, 2)
     cache[:, 0], cache[:, 1] = 0.1, pitch_rate
-    return _ns(scene={"robot": robot}, car_imu=_ns(cache=cache), num_envs=N, device="cpu")
+    car_imu = _ns(cache=cache, yaw_rate=torch.full((N, 1), yaw_rate))
+    return _ns(scene={"robot": robot}, car_imu=car_imu, num_envs=N, device="cpu")
 
 
 # ── axle speed ──────────────────────────────────────────────────────────────────────────
@@ -105,11 +107,11 @@ def test_resampled_command_stays_in_range_and_can_be_zero():
     assert value.abs().max() <= 0.08 and 0.4 < (value == 0).float().mean() < 0.6 and value.std() > 0.02
 
 
-# ── frozen pitch action ─────────────────────────────────────────────────────────────────
+# ── frozen velocity action (position task) ──────────────────────────────────────────────
 
 
 class _Recorder:
-    """Stands in for the frozen pitch policy: remembers its observation, answers a fixed action."""
+    """Stands in for the frozen velocity policy: remembers its observation, answers a fixed action."""
 
     def __init__(self, answer):
         self.answer, self.seen = torch.tensor(answer), None
@@ -119,43 +121,35 @@ class _Recorder:
         return self.answer.expand(obs.shape[0], 2).clone()
 
 
-def _action(joint_vel, answer=(0.2, -0.3), guard=0.5, pitch_rate=0.0):
-    term = FrozenPitchAction.__new__(FrozenPitchAction)
-    term.cfg = _ns(pitch_scale=0.08, torque_scale=STALL, speed_guard=guard)
-    term._env = _env(torch.as_tensor(joint_vel, dtype=torch.float32), pitch_rate=pitch_rate)
+def _action(joint_vel, answer=(0.2, -0.3), pitch_rate=0.0, yaw_rate=0.0):
+    term = FrozenVelocityAction.__new__(FrozenVelocityAction)
+    term.cfg = _ns(torque_scale=STALL, turn_share=0.5)
+    term._env = _env(torch.as_tensor(joint_vel, dtype=torch.float32), pitch_rate=pitch_rate, yaw_rate=yaw_rate)
     term._asset = term._env.scene["robot"]
     term._joint_ids = slice(None)
+    term._scale = torch.tensor([0.4, 2.0])
     term.policy = _Recorder(answer)
-    term._raw_actions, term._output = torch.zeros(N, 1), torch.zeros(N, 1)
+    term._raw_actions, term._command = torch.zeros(N, 2), torch.zeros(N, 2)
     term._policy_last_action, term._torque = torch.zeros(N, 2), torch.zeros(N, 2)
     return term
 
 
-def test_pitch_action_scales_clamps_and_builds_the_training_observation():
-    term = _action(torch.tensor([[1.0, 3.0]] * N))
-    term.process_actions(torch.tensor([[0.5], [-1.0], [3.0], [0.0]]))
-    assert term.processed_actions[:, 0].tolist() == pytest.approx([0.04, -0.08, 0.08, 0.0])  # [-1, 1] x pitch_scale
-    # [pitch, pitch rate, wheel L, wheel R, last action x2, pitch target]: the order stage 1 was trained on
-    assert term.policy.seen[0].tolist() == pytest.approx([0.1, 0.0, 1.0, 3.0, 0.0, 0.0, 0.04])
-    assert torch.allclose(term._torque, torch.tensor([[0.2, -0.3]]).expand(N, 2) * STALL)
+def test_velocity_action_scales_clamps_and_builds_the_training_observation():
+    term = _action(torch.tensor([[10.0, 12.0]] * N), yaw_rate=0.7)
+    term.process_actions(torch.tensor([[0.5, 0.5], [-1.0, 0.0], [3.0, -3.0], [0.0, 0.0]]))
+    expected = torch.tensor([[0.2, 1.0], [-0.4, 0.0], [0.4, -2.0], [0.0, 0.0]])  # [-1, 1] x (0.4 m/s, 2 rad/s)
+    assert torch.allclose(term.processed_actions, expected)
+    # [pitch, pitch rate, speed, gyro turn rate, v, w, last action x2]: the order the velocity task was trained on
+    speed = car_cfg.WHEEL_RADIUS_M * 11.0
+    assert term.policy.seen[0].tolist() == pytest.approx([0.1, 0.0, speed, 0.7, 0.2, 1.0, 0.0, 0.0])
+    # common 0.2, turn -0.3 x 0.5: left 0.35, right 0.05
+    assert torch.allclose(term._torque, torch.tensor([[0.35, 0.05]]).expand(N, 2) * STALL)
 
 
-def test_pitch_action_feeds_back_the_clipped_action_like_training():
+def test_velocity_action_feeds_back_the_clipped_action_like_training():
     term = _action(torch.zeros(N, 2), answer=(1.7, -2.5))
-    term.process_actions(torch.zeros(N, 1))
+    term.process_actions(torch.zeros(N, 2))
     assert term._policy_last_action[0].tolist() == [1.0, -1.0]  # clip_actions = 1.0 in training
-    assert torch.allclose(term._torque, torch.tensor([[1.0, -1.0]]).expand(N, 2) * STALL)
-    term.process_actions(torch.zeros(N, 1))
-    assert term.policy.seen[0, 4:6].tolist() == [1.0, -1.0]
-
-
-def test_pitch_action_guard_uses_the_estimated_speed_not_the_simulator_speed():
-    # the simulator says 2 m/s (never read), the encoders say 0.4 m/s: below the guard, the target passes
-    term = _action(torch.full((N, 2), 10.0))
-    term._env.scene["robot"].data.root_lin_vel_b = _ns(torch=torch.tensor([[2.0, 0.0, 0.0]] * N))
-    term.process_actions(torch.ones(N, 1))
-    assert term.processed_actions[0, 0].item() == pytest.approx(0.08)
-    # 15 rad/s = 0.6 m/s estimated: above the guard, a target that speeds the car up is zeroed, a braking one is kept
-    term = _action(torch.full((N, 2), 15.0))
-    term.process_actions(torch.tensor([[1.0], [-1.0], [0.5], [-0.5]]))
-    assert term.processed_actions[:, 0].tolist() == pytest.approx([0.0, -0.08, 0.0, -0.04])
+    assert torch.allclose(term._torque, torch.tensor([[1.0, 0.5]]).expand(N, 2) * STALL)  # 1 +- 0.5, clipped
+    term.process_actions(torch.zeros(N, 2))
+    assert term.policy.seen[0, 6:8].tolist() == [1.0, -1.0]

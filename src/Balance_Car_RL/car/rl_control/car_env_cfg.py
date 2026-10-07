@@ -1,7 +1,7 @@
-"""Shared part of the three RL tasks (``upright_env_cfg.py``, ``pitch_env_cfg.py``, ``velocity_env_cfg.py``).
+"""Shared part of every task (``upright_env_cfg.py``, ``velocity_env_cfg.py``, ``position_env_cfg.py``, the gain tasks).
 
     scene:        ground, light, one Balboa per environment and its IMU on the control board
-    action:       one normalized torque per wheel (the velocity stage replaces it with mdp.FrozenPitchAction)
+    action:       one normalized torque per wheel (the other tasks replace it with their own)
     observation:  IMU pitch and pitch rate first (mdp.ImuPitchAndRate); each task adds its terms in its env cfg
     reward:       alive, terminated, pitch and yaw rate, action rate; each task adds what it tracks
     events:       random start tilt and wheel speed, random pushes while it balances

@@ -46,3 +46,21 @@ class BalancePolicy:
     def reset(self) -> None:
         """Clear the recurrent action input, e.g. after the car has been picked up."""
         self._last_action[:] = 0.0
+
+
+class OnnxActor:
+    """An exported ONNX actor as a function: observation vector -> action vector (normalization is in the graph)."""
+
+    def __init__(self, onnx_path: str):
+        try:
+            import onnxruntime as ort
+        except ImportError as err:  # pragma: no cover - depends on the deployment machine
+            raise RuntimeError(
+                'onnxruntime is required to run the policy: pip install onnxruntime') from err
+        self._session = ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
+        self._input_name = self._session.get_inputs()[0].name
+
+    def __call__(self, obs) -> np.ndarray:
+        """Action for one observation (1-D), as float32."""
+        out = self._session.run(None, {self._input_name: np.asarray([obs], dtype=np.float32)})[0][0]
+        return out.astype(np.float32)

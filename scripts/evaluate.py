@@ -10,6 +10,11 @@ the same environment, pushes and motor model. Usage (same flags as ``isaaclab pl
 
     python scripts/evaluate.py --task BalanceCar-Upright-v0 --num_envs 256 --checkpoint <run>/model_299.pt
     python scripts/evaluate.py --task BalanceCar-Upright-v0 --num_envs 256 --controller lqr
+    python scripts/evaluate.py --task BalanceCar-Position-v0 --num_envs 256 --controller lqr   # or Velocity, pid
+
+On the velocity and position tasks the classical controller drives the ``[common, turn]`` action of the velocity task
+(``pid_control/drive.py``): LQR or PID balances at the commanded wheel speed, a PI on the gyro holds the turn rate, and
+on the position task the go-to-goal PID writes that command (``tools/scripted.py`` ``ClassicalDrive``).
 
 It reuses the private helpers of Isaac Lab's ``play_rsl_rl`` backend, so it is tied to the Isaac Lab version this
 project was developed against. Exit code is 1 when a threshold is violated.
@@ -25,6 +30,7 @@ import torch
 
 from isaaclab.app import launch_simulation
 from isaaclab.envs import DirectMARLEnvCfg
+from isaaclab.utils.math import wrap_to_pi
 
 from isaaclab_rl.entrypoints.backends import play_rsl_rl as backend
 from isaaclab_rl.entrypoints.common import apply_env_overrides, create_isaaclab_env, startup_screen
@@ -38,17 +44,69 @@ from isaaclab_rl.rsl_rl import (
 from isaaclab_tasks.utils import resolve_task_config
 
 import Balance_Car_RL.tasks  # noqa: F401  registers BalanceCar-Upright-v0
-from Balance_Car_RL.car.lqr_control import LQRController
+from Balance_Car_RL.car.lqr_control import LQRController, design_lqr
+from Balance_Car_RL.car.mdp.rewards import body_pitch
 from Balance_Car_RL.car.pid_control import CascadePID
+from Balance_Car_RL.car.tools.scripted import ClassicalDrive, with_drive_action
 
-SETTLE_S = {"pitch": 0.5, "speed": 1.5}
+SETTLE_S = {"pitch": 0.5, "speed": 1.5, "turn": 1.0, "distance": 5.0, "heading": 5.0}
 """Seconds after a command change before the tracking error counts as settled (reported, not used to pass): the lean is
-followed within a fraction of a second, a speed step of 0.8 m/s takes about 1 s at the largest lean."""
+followed within a fraction of a second, a speed step of 0.8 m/s takes about 1 s, a goal 1.4 m away about 5 s (0.4 m/s at
+most, a turn toward it, and the car must slow down before it)."""
 
-TRACK_LIMIT = {"pitch": 0.03, "speed": 0.08}
-"""Largest median absolute tracking error that passes [rad, m/s]. The median is used because resets from a tilt of
-0.25 rad, command steps and pushes give large but short errors that dominate an RMS; holding still would give a
-median of 0.03 rad and 0.13 m/s."""
+TRACK_LIMIT = {"pitch": 0.03, "speed": 0.08, "turn": 0.3, "distance": 0.10}
+"""Largest median absolute tracking error that passes [rad, m/s, rad/s, m]. The median is used because resets from a
+tilt of 0.25 rad, command steps and pushes give large but short errors that dominate an RMS; holding still would give a
+median of 0.03 rad and 0.13 m/s. The distance to a goal is judged on the last step of each goal (the car must have
+arrived), not over the drive to it."""
+
+UNITS = {"pitch": "rad", "speed": "m/s", "turn": "rad/s", "distance": "m", "heading": "rad"}
+
+
+def tracked_kinds(task: str) -> list[str]:
+    """What the task's command asks for: the quantities whose error is reported (and judged, see ``TRACK_LIMIT``)."""
+    if "Pitch" in task:
+        return ["pitch"]
+    if "Velocity-Gains" in task:
+        return ["speed"]
+    if "Velocity" in task:
+        return ["speed", "turn"]
+    if "Position" in task:
+        return ["distance", "heading"]
+    return []
+
+
+def snapshot(env):
+    """The command active while the next action is chosen, i.e. the one it is scored against after the step: read
+    before ``env.step()``, which may resample it for the *following* action. Returns (what to score against, a tensor
+    whose change per env marks a new command)."""
+    commands = env.command_manager
+    if "target" in commands.active_terms:  # pitch or speed layer of the gain cascade
+        target = commands.get_command("target")[:, 0].clone()
+        return target, target.unsqueeze(-1)
+    if "base_velocity" in commands.active_terms:
+        velocity = commands.get_command("base_velocity").clone()
+        return velocity, velocity
+    term = commands.get_term("pose_command")
+    goal = torch.cat([term.pos_command_w[:, :2], term.heading_command_w.unsqueeze(-1)], dim=1).clone()
+    return goal, goal
+
+
+def measure(kind: str, env, wanted) -> tuple[torch.Tensor, torch.Tensor]:
+    """``(value, command)`` of one tracked quantity after the step, both (num_envs,)."""
+    robot = env.scene["robot"]
+    if kind == "pitch":
+        return body_pitch(env), wanted
+    if kind == "speed":
+        value = robot.data.root_lin_vel_b.torch[:, 0]
+        return value, wanted if wanted.dim() == 1 else wanted[:, 0]
+    if kind == "turn":
+        return robot.data.root_ang_vel_b.torch[:, 2], wanted[:, 2]
+    if kind == "distance":
+        distance = (robot.data.root_pos_w.torch[:, :2] - wanted[:, :2]).norm(dim=1)
+        return distance, torch.zeros_like(distance)
+    heading = wrap_to_pi(robot.data.heading_w.torch - wanted[:, 2])
+    return heading, torch.zeros_like(heading)
 
 
 def _no_reset(_env_ids) -> None:
@@ -61,6 +119,13 @@ def _split_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument(
         "--pid_gains", type=float, nargs=4, metavar=("KP", "KI", "KD", "KV"), help="Override the PID gains."
     )
+    parser.add_argument(
+        "--lqr_weights",
+        type=float,
+        nargs=4,
+        metavar=("Q_PITCH", "Q_RATE", "Q_WHEEL", "R"),
+        help="Override the LQR weights (lqr_control/lqr.py DEFAULT_Q, DEFAULT_R).",
+    )
     parser.add_argument("--eval_steps", type=int, default=1500, help="Policy steps to roll out (50 Hz).")
     parser.add_argument("--max_fall_rate", type=float, default=0.02, help="Allowed share of episodes ending in a fall.")
     parser.add_argument("--max_rms_pitch", type=float, default=0.10, help="Allowed RMS pitch [rad] (Upright task).")
@@ -68,7 +133,7 @@ def _split_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
         "--max_track_error",
         type=float,
         default=None,
-        help="Allowed median tracking error: Pitch [rad] (default 0.03), Velocity [m/s] (default 0.08).",
+        help="Allowed median error of the first tracked quantity (default: TRACK_LIMIT of this script).",
     )
     parser.add_argument(
         "--no_push", action="store_true", help="Disable the random pushes (tracking without disturbances)."
@@ -84,10 +149,11 @@ def _split_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
 def main(argv: list[str]) -> int:
     own, rest = _split_args(argv)
     args_cli = backend._parse_args(rest)
-    if own.controller != "policy" and ("Pitch" in args_cli.task or "Velocity" in args_cli.task):
+    drive = own.controller != "policy" and any(k in args_cli.task for k in ("Velocity-v", "Position-v"))
+    if own.controller != "policy" and not drive and "Upright" not in args_cli.task:
         sys.exit(
-            f"--controller {own.controller} expects the Upright observation (6 values) and action (2 wheels); "
-            f"{args_cli.task} does not match that layout."
+            f"--controller {own.controller} runs the Upright, Velocity and Position tasks; {args_cli.task} is a gain "
+            "task, whose zero action already is the tuned PID."
         )
     if own.controller == "policy" and not args_cli.checkpoint:
         sys.exit(
@@ -103,6 +169,8 @@ def main(argv: list[str]) -> int:
             apply_env_overrides(args_cli, env_cfg)
             if own.no_push:
                 env_cfg.events.push = None
+            if drive:  # the classical drive writes the wheel torques, not the frozen velocity network
+                with_drive_action(env_cfg)
             env_cfg.seed = agent_cfg.seed
             log_root = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
             checkpoint = None
@@ -120,48 +188,62 @@ def main(argv: list[str]) -> int:
                 reset = _no_reset
             else:
                 ctrl = (
-                    LQRController(device=device)
+                    LQRController(
+                        design_lqr(q=tuple(own.lqr_weights[:3]), r=own.lqr_weights[3]) if own.lqr_weights else None,
+                        device=device,
+                    )
                     if own.controller == "lqr"
                     else CascadePID(*own.pid_gains)
                     if own.pid_gains
                     else CascadePID()
                 )
 
+                if drive:
+                    ctrl = ClassicalDrive(env.unwrapped, ctrl)
+
                 def policy(obs):
-                    return ctrl.act(obs["policy"])
+                    return ctrl(obs["policy"]) if drive else ctrl.act(obs["policy"])
 
                 reset = getattr(ctrl, "reset", _no_reset)
             screen.close()
 
             robot = env.unwrapped.scene["robot"]
             n = env.unwrapped.num_envs
-            pitch_sq, est_sq, yaw_sq, wheel_abs, torque_abs, speed_abs, track_sq, count = [0.0] * 7 + [0]
-            errors: list[torch.Tensor] = []
+            pitch_sq, est_sq, yaw_sq, wheel_abs, torque_abs, speed_abs, count = [0.0] * 6 + [0]
+            kinds = tracked_kinds(args_cli.task)
+            track = {
+                k: {
+                    "sq": 0.0,
+                    "errors": [],
+                    # the error on the last step of each command, before the next one: did the car get there in time
+                    "arrivals": [],
+                    "prev_error": None,
+                    # per command sign: sum of command, sum of reached value, samples (a policy that only goes one way)
+                    "by_sign": {"+": [0.0, 0.0, 0], "-": [0.0, 0.0, 0]},
+                    "settled_sq": 0.0,
+                    "settled_count": 0,
+                }
+                for k in kinds
+            }
             since = torch.zeros(n, device=env.unwrapped.device)
-            prev_cmd = None
-            settled_sq, settled_count = 0.0, 0
-            has_cmd = "target" in env.unwrapped.command_manager.active_terms
-            kind = "pitch" if "Pitch" in args_cli.task else "speed" if "Velocity" in args_cli.task else None
-            settle_steps = int(SETTLE_S.get(kind, 1.0) / env.unwrapped.step_dt)
+            prev_key = None
+            settle_steps = {k: int(SETTLE_S[k] / env.unwrapped.step_dt) for k in kinds}
             peak = torch.zeros(n, device=env.unwrapped.device)
             falls, timeouts = 0, 0
             obs = env.get_observations()
             with torch.inference_mode():
                 for step in range(own.eval_steps):
-                    # the command active while `action` is chosen, i.e. the one it is scored against below: read it
-                    # now, since env.step() may resample it for the *next* action before this one is scored
-                    cmd_active = env.unwrapped.command_manager.get_command("target")[:, 0].clone() if has_cmd else None
+                    wanted, key = snapshot(env.unwrapped) if kinds else (None, None)
                     action = policy(obs)
                     obs, _, dones, infos = env.step(action)
-                    if step < own.trace and has_cmd:
+                    if step < own.trace and kinds:
                         e = own.trace_env
-                        cmd0 = float(env.unwrapped.command_manager.get_command("target")[e, 0])
-                        v0 = float(robot.data.root_lin_vel_b.torch[e, 0])
+                        values = {k: measure(k, env.unwrapped, wanted) for k in kinds}
+                        shown = " ".join(f"{k}={float(v[e]):+.3f}/{float(c[e]):+.3f}" for k, (v, c) in values.items())
                         acts = [round(float(a), 3) for a in action[e]]
                         pitch0 = float(obs["policy"][e, 0])
-                        print(f"[TRACE] {step:4d} cmd={cmd0:+.3f} v={v0:+.3f} pitch={pitch0:+.3f} action={acts}")
-                    g = robot.data.projected_gravity_b.torch
-                    pitch = torch.atan2(g[:, 0], -g[:, 2])
+                        print(f"[TRACE] {step:4d} value/command {shown} pitch={pitch0:+.3f} action={acts}")
+                    pitch = body_pitch(env.unwrapped)
                     if step >= 50:  # skip the randomized start
                         pitch_sq += float((pitch**2).mean())
                         est_sq += float(((obs["policy"][:, 0] - pitch) ** 2).mean())  # IMU estimate vs truth
@@ -170,17 +252,33 @@ def main(argv: list[str]) -> int:
                         torque_abs += float(robot.data.applied_torque.torch.abs().mean())
                         speed_abs += float(robot.data.root_lin_vel_b.torch[:, :2].norm(dim=1).mean())
                         peak = torch.maximum(peak, pitch.abs())
-                        if has_cmd and kind:
-                            cmd = cmd_active
-                            value = pitch if kind == "pitch" else robot.data.root_lin_vel_b.torch[:, 0]
-                            track_sq += float(((value - cmd) ** 2).mean())
-                            errors.append((value - cmd).abs())
-                            changed = torch.ones_like(cmd, dtype=torch.bool) if prev_cmd is None else cmd != prev_cmd
+                        if kinds:
+                            changed = (
+                                torch.ones(n, dtype=torch.bool, device=key.device)
+                                if prev_key is None
+                                else (key != prev_key).any(dim=1)
+                            )
                             since = torch.where(changed, torch.zeros_like(since), since + 1)
-                            prev_cmd = cmd.clone()
-                            settled = since >= settle_steps
-                            settled_sq += float(((value - cmd) ** 2)[settled].sum())
-                            settled_count += int(settled.sum())
+                            prev_key = key.clone()
+                        for k in kinds:
+                            t = track[k]
+                            value, cmd = measure(k, env.unwrapped, wanted)
+                            error = value - cmd
+                            t["sq"] += float((error**2).mean())
+                            t["errors"].append(error.abs())
+                            if k in ("pitch", "speed", "turn"):  # a goal or a heading has no direction of its own
+                                for sign, mask in (("+", cmd > 0.01), ("-", cmd < -0.01)):
+                                    t["by_sign"][sign][0] += float(cmd[mask].sum())
+                                    t["by_sign"][sign][1] += float(value[mask].sum())
+                                    t["by_sign"][sign][2] += int(mask.sum())
+                            if t["prev_error"] is not None:
+                                t["arrivals"].append(t["prev_error"][changed & ~t["prev_error"].isnan()].abs())
+                            # an env reset in this step is already at its new start but still scored against its old
+                            # command: not an arrival
+                            t["prev_error"] = torch.where(dones.bool(), torch.nan, error)
+                            settled = since >= settle_steps[k]
+                            t["settled_sq"] += float((error**2)[settled].sum())
+                            t["settled_count"] += int(settled.sum())
                         count += 1
                     ended = dones.bool()
                     if ended.any():
@@ -203,25 +301,39 @@ def main(argv: list[str]) -> int:
                 "mean planar speed [m/s]": speed_abs / count,
                 "max pitch seen [rad]": float(peak.max()),
             }
-            if has_cmd and kind:
-                unit = "rad" if kind == "pitch" else "m/s"
-                stats[f"RMS {kind} tracking error [{unit}]"] = (track_sq / count) ** 0.5
-                stats[f"settled RMS {kind} error, {SETTLE_S[kind]} s after a command change [{unit}]"] = (
-                    settled_sq / max(settled_count, 1)
+            for k in kinds:
+                t, unit = track[k], UNITS[k]
+                stats[f"RMS {k} tracking error [{unit}]"] = (t["sq"] / count) ** 0.5
+                stats[f"settled RMS {k} error, {SETTLE_S[k]} s after a command change [{unit}]"] = (
+                    t["settled_sq"] / max(t["settled_count"], 1)
                 ) ** 0.5
-                flat = torch.cat(errors)
-                stats[f"median / 90th percentile |{kind} error| [{unit}]"] = [
+                for sign, (cmd_sum, value_sum, m) in t["by_sign"].items() if k in ("pitch", "speed", "turn") else ():
+                    stats[f"{k} command {sign}: mean command / mean reached [{unit}]"] = [
+                        cmd_sum / max(m, 1),
+                        value_sum / max(m, 1),
+                    ]
+                flat = torch.cat(t["errors"])
+                last = torch.cat(t["arrivals"]) if t["arrivals"] else torch.zeros(0)
+                if last.numel() == 0:  # a short run in which no command ended
+                    last = torch.full((1,), float("nan"))
+                stats[f"median / 90th percentile |{k} error| on the last step of a command [{unit}]"] = [
+                    float(last.median()),
+                    float(torch.quantile(last[:: max(1, last.numel() // 100000)], 0.9)),
+                ]
+                stats[f"median / 90th percentile |{k} error| [{unit}]"] = [
                     float(flat.median()),
                     float(torch.quantile(flat[:: max(1, flat.numel() // 100000)], 0.9)),
                 ]
             for k, v in stats.items():
                 print(f"[EVAL] {k:28s}: {v}")
-            if has_cmd and kind:
-                limit = own.max_track_error or TRACK_LIMIT[kind]
-                key = next(k for k in stats if k.startswith("median"))
-                ok = stats["fall rate"] <= own.max_fall_rate and stats[key][0] <= limit
-            else:
-                ok = stats["fall rate"] <= own.max_fall_rate and stats["rms pitch [rad]"] <= own.max_rms_pitch
+            ok = stats["fall rate"] <= own.max_fall_rate
+            judged = [k for k in kinds if k in TRACK_LIMIT]
+            for i, k in enumerate(judged):
+                limit = own.max_track_error if (own.max_track_error and i == 0) else TRACK_LIMIT[k]
+                where = " on the last step of a command" if k == "distance" else ""
+                ok = ok and stats[f"median / 90th percentile |{k} error|{where} [{UNITS[k]}]"][0] <= limit
+            if not kinds:
+                ok = ok and stats["rms pitch [rad]"] <= own.max_rms_pitch
             if own.json:
                 stats["pass"] = bool(ok)
                 pathlib.Path(own.json).write_text(json.dumps(stats, indent=2, default=str) + "\n")

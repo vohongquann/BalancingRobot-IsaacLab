@@ -1,6 +1,6 @@
-"""Observation terms: what the real robot can measure, a raw IMU (``ImuPitchAndRate``) and the wheel encoders
-(``wheel_speed_estimate``). Isaac Lab's ``joint_vel_rel``, ``last_action`` and ``generated_commands`` complete the
-vectors.
+"""Observation terms: what the real robot can measure, a raw IMU (``ImuPitchAndRate``, ``gyro_yaw_rate``) and the wheel
+encoders (``wheel_speed_estimate``). Isaac Lab's ``joint_vel_rel``, ``last_action`` and ``generated_commands`` complete
+the vectors.
 """
 
 from __future__ import annotations
@@ -32,6 +32,9 @@ class ImuPitchAndRate(ManagerTermBase):
     The accelerometer is first corrected for the acceleration of the axle, which the encoders give (``estimation.py``,
     ``compensate_acceleration``): without it, driving would be taken for a tilt.
 
+    The yaw rate of the same gyro sample (car z axis, with its noise and offset) is kept in ``yaw_rate`` for
+    :func:`gyro_yaw_rate`.
+
     The filter runs once per policy step, and keeps running across a reset: ``reset()`` seeds the estimate from the
     simulator's true gravity direction (a reset can start mid-fall, unlike the real robot's power-up at rest, so
     restarting from one noisy accelerometer sample would throw that known state away). Until the IMU sensor produces
@@ -55,6 +58,7 @@ class ImuPitchAndRate(ManagerTermBase):
         self._accel_bias = torch.zeros(n, 3, device=env.device)
         self._gyro_bias = torch.zeros(n, 3, device=env.device)
         self._cache = torch.zeros(n, 2, device=env.device)
+        self._yaw_rate = torch.zeros(n, 1, device=env.device)
         self._speed_prev = torch.zeros(n, device=env.device)
         self._accel_lp = torch.zeros(n, device=env.device)
         self._accel_alpha = car_cfg.ACCEL_COMP_TAU_S / (car_cfg.ACCEL_COMP_TAU_S + env.step_dt)
@@ -64,6 +68,11 @@ class ImuPitchAndRate(ManagerTermBase):
     def cache(self) -> torch.Tensor:
         """The latest ``[pitch, pitch rate]``, shape (num_envs, 2), computed by the last observation."""
         return self._cache
+
+    @property
+    def yaw_rate(self) -> torch.Tensor:
+        """The gyro's turn rate [rad/s] about the car's z axis of the last observation, shape (num_envs, 1)."""
+        return self._yaw_rate
 
     def reset(self, env_ids: Sequence[int] | None = None) -> None:
         ids = slice(None) if env_ids is None else env_ids
@@ -76,6 +85,7 @@ class ImuPitchAndRate(ManagerTermBase):
         g_car = self._robot.data.projected_gravity_b.torch[ids]
         self._g[ids] = g_car @ self._r_car_from_imu
         self._cache[ids] = self._output(self._g[ids], torch.zeros(n, 3, device=self.device))
+        self._yaw_rate[ids] = self._robot.data.root_ang_vel_b.torch[ids, 2:3]  # seeded like the pitch
         # the axle speed the next acceleration is measured from (encoders and the true pitch rate at the reset)
         wheel = self._robot.data.joint_vel.torch[ids].mean(dim=1)
         self._speed_prev[ids] = car_cfg.WHEEL_RADIUS_M * (wheel + self._robot.data.root_ang_vel_b.torch[ids, 1])
@@ -106,6 +116,8 @@ class ImuPitchAndRate(ManagerTermBase):
         )
         self._g = torch.where(has_sample.unsqueeze(-1), g_new, self._g)
         self._cache = torch.where(has_sample.unsqueeze(-1), torch.stack([pitch, pitch_rate], dim=1), self._cache)
+        yaw_rate = (gyro @ self._r_car_from_imu.T)[:, 2:3]
+        self._yaw_rate = torch.where(has_sample.unsqueeze(-1), yaw_rate, self._yaw_rate)
         return self._cache
 
     def _output(self, g_imu: torch.Tensor, gyro_imu: torch.Tensor) -> torch.Tensor:
@@ -126,6 +138,16 @@ def axle_speed(env: ManagerBasedRLEnv, joint_ids) -> torch.Tensor:
         raise RuntimeError("no ImuPitchAndRate term in the observations: the speed estimate needs its pitch rate")
     wheel = env.scene["robot"].data.joint_vel.torch[:, joint_ids].mean(dim=1)
     return car_cfg.WHEEL_RADIUS_M * (wheel + car_imu.cache[:, 1])
+
+
+def gyro_yaw_rate(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Turn rate [rad/s] from the gyro (``ImuPitchAndRate``, computed before this term in the same group), shape
+    (num_envs, 1). Not from the encoders: the wheels scrub while turning, and the encoder estimate
+    ``r (w_right - w_left) / track`` read about 11 % more than the true turn rate."""
+    car_imu = getattr(env, "car_imu", None)
+    if car_imu is None:
+        raise RuntimeError("no ImuPitchAndRate term in the observations: the turn rate is its gyro's")
+    return car_imu.yaw_rate
 
 
 def wheel_speed_estimate(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:  # noqa: B008

@@ -23,7 +23,14 @@ ros/log/
 
 .omc
 
+# what Isaac Sim's URDF importer writes next to the URDF when it is opened in the GUI (absolute paths inside); the
+# simulation converts the URDF itself, into a temporary folder
+src/Balance_Car_RL/assets/data/balboa/balboa*/
+
 # CAD sources (STEP, DXF): large third-party files, reference only (fetch with tools/fetch_pololu_cad.sh; the PDFs go
 # to docs/hardware/balboa/).
 # The generated URDF and STL meshes in src/Balance_Car_RL/assets/data/balboa/ are what the simulation uses.
 cad/
+code_review.md
+
+.usd

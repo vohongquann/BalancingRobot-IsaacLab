@@ -5,13 +5,14 @@
 
 """Train the cascade stage by stage, freezing each stage's weights before the next stage uses them.
 
-    python scripts/train_cascade.py                       # pitch, then velocity
-    python scripts/train_cascade.py --stages pitch        # one stage (velocity needs pitch frozen first)
+    python scripts/train_cascade.py                       # velocity, then position
+    python scripts/train_cascade.py --stages velocity     # one stage (position needs velocity frozen first)
+    python scripts/train_cascade.py --stages pitch_gains velocity_gains position_gains    # the gain tasks
     python scripts/train_cascade.py --dry-run             # print the plan only
 
 For every stage the script does the same five things, in this order, and stops at the first failure:
 
-1. train with ``isaaclab train`` while recording video clips of the training itself;
+1. train with ``isaaclab train`` (with ``--train-video`` also recording clips of the training itself);
 2. play the last checkpoint with ``isaaclab play``: records the demo video and exports ``policy.pt`` / ``policy.onnx``;
 3. evaluate it headless (``scripts/evaluate.py``) against the stage's pass criteria;
 4. freeze it: copy the exported policy to ``src/Balance_Car_RL/car/rl_control/frozen/<stage>/`` with a ``meta.json``;
@@ -54,10 +55,20 @@ class Stage:
 
 
 STAGES = {
-    "pitch": Stage("pitch", "BalanceCar-Pitch-v0", "balance_car_pitch"),
-    "velocity": Stage("velocity", "BalanceCar-Velocity-v0", "balance_car_velocity", needs=("pitch",)),
+    "velocity": Stage("velocity", "BalanceCar-Velocity-v0", "balance_car_velocity"),
+    "position": Stage("position", "BalanceCar-Position-v0", "balance_car_position", needs=("velocity",)),
+    "pitch_gains": Stage("pitch_gains", "BalanceCar-Pitch-Gains-v0", "balance_car_pitch_gains"),
+    "velocity_gains": Stage(
+        "velocity_gains", "BalanceCar-Velocity-Gains-v0", "balance_car_velocity_gains", needs=("pitch_gains",)
+    ),
+    "position_gains": Stage(
+        "position_gains", "BalanceCar-Position-Gains-v0", "balance_car_position_gains", needs=("velocity",)
+    ),
 }
-DEFAULT_ORDER = ("pitch", "velocity")
+DEFAULT_ORDER = ("velocity", "position")
+"""The RL cascade, what runs without ``--stages``."""
+ALL_ORDER = (*DEFAULT_ORDER, "pitch_gains", "velocity_gains", "position_gains")
+"""Every stage, bottom-up within each of the two cascades."""
 
 
 def run(cmd: list[str], log: pathlib.Path | None = None, timeout: float | None = None) -> str:
@@ -127,9 +138,27 @@ def to_gif(mp4: pathlib.Path, gif: pathlib.Path, seconds: float = 6.0, fps: int 
 
 
 def onnx_single_file(src: pathlib.Path, dst: pathlib.Path) -> None:
+    """One ONNX file without the external ``.data`` file and without the stack traces the exporter stores per node
+    (``pkg.torch.onnx.stack_trace``: absolute paths of this machine's Python packages)."""
     import onnx
 
-    onnx.save_model(onnx.load(str(src), load_external_data=True), str(dst), save_as_external_data=False)
+    model = onnx.load(str(src), load_external_data=True)
+    for node in model.graph.node:
+        keep = [p for p in node.metadata_props if not p.key.startswith("pkg.torch.onnx.stack_trace")]
+        del node.metadata_props[:]
+        node.metadata_props.extend(keep)
+    onnx.save_model(model, str(dst), save_as_external_data=False)
+
+
+def torchscript_without_debug(src: pathlib.Path, dst: pathlib.Path) -> None:
+    """Copy a TorchScript file without its ``*.debug_pkl`` entries: they hold the absolute source paths of this
+    machine's Python packages, and TorchScript loads and runs the same without them."""
+    import zipfile
+
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_STORED) as zout:
+        for item in zin.infolist():
+            if not item.filename.endswith(".debug_pkl"):
+                zout.writestr(item, zin.read(item.filename))
 
 
 def stale_dependents(frozen_stage: str) -> list[str]:
@@ -162,7 +191,7 @@ def do_stage(stage: Stage, args: argparse.Namespace) -> None:
     logdir = ROOT / "logs/cascade"
     video = ["--video", "--video_length", str(args.video_length), "--video_interval", str(args.video_interval)]
 
-    # 1. train (with video), or reuse the newest run
+    # 1. train, or reuse the newest run
     if args.reuse_latest:
         run_dir = newest_run(stage.experiment, after=0.0)
         ckpt = last_checkpoint(run_dir)
@@ -183,7 +212,7 @@ def do_stage(stage: Stage, args: argparse.Namespace) -> None:
         result: dict[str, str] = {}
         retry(
             lambda: result.update(
-                out=run(train_cmd + ([] if args.no_video else video), logdir / f"{stage.name}_train.log")
+                out=run(train_cmd + (video if args.train_video else []), logdir / f"{stage.name}_train.log")
             ),
             lambda: "Training time" in result.get("out", ""),
         )
@@ -225,7 +254,8 @@ def do_stage(stage: Stage, args: argparse.Namespace) -> None:
         "--json",
         str(eval_json),
     ]
-    retry(lambda: run(eval_cmd, logdir / f"{stage.name}_eval.log"), eval_json.is_file)
+    # bounded like play: a Kit crash at start sometimes hangs in the crash reporter instead of exiting
+    retry(lambda: run(eval_cmd, logdir / f"{stage.name}_eval.log", timeout=600), eval_json.is_file)
     if not eval_json.is_file():
         sys.exit(f"Evaluation of '{stage.name}' did not finish, see {logdir / f'{stage.name}_eval.log'}")
     stats = json.loads(eval_json.read_text())
@@ -237,7 +267,7 @@ def do_stage(stage: Stage, args: argparse.Namespace) -> None:
     # 4. freeze
     target = FROZEN / stage.name
     target.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(exported / "policy.pt", target / "policy.pt")
+    torchscript_without_debug(exported / "policy.pt", target / "policy.pt")
     onnx_single_file(exported / "policy.onnx", target / "policy.onnx")
     meta = {
         "stage": stage.name,
@@ -265,7 +295,7 @@ def do_stage(stage: Stage, args: argparse.Namespace) -> None:
         logdir / f"{stage.name}_plot.log",
     )
     if not args.no_video:
-        for kind, sub in (("train", "train"), ("demo", "play")):
+        for kind, sub in (("train", "train"), ("demo", "play")) if args.train_video else (("demo", "play"),):
             clips = sorted((run_dir / "videos" / sub).glob("*.mp4"))
             if not clips:
                 print(f"warning: no {kind} video found in {run_dir / 'videos' / sub}")
@@ -279,11 +309,22 @@ def do_stage(stage: Stage, args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--stages", nargs="+", choices=list(STAGES), default=list(DEFAULT_ORDER))
-    parser.add_argument("--num_envs", type=int, default=4096)
+    parser.add_argument(
+        "--num_envs",
+        type=int,
+        default=24576,
+        help="Environments of the training runs: 24576 take about 10 GB of the 12 GB card (32768 run out of memory).",
+    )
     parser.add_argument("--iterations", type=int, default=None, help="Override the PPO iterations of every stage.")
     parser.add_argument("--video_length", type=int, default=300, help="Env steps per training clip (50 steps = 1 s).")
     parser.add_argument("--video_interval", type=int, default=2400, help="Env steps between training clips.")
     parser.add_argument("--no-video", action="store_true", help="Skip video recording (faster, for smoke tests).")
+    parser.add_argument(
+        "--train-video",
+        action="store_true",
+        help="Also record clips while training: renders every step, twice the iteration time and more GPU memory "
+        "(use with --num_envs 8192).",
+    )
     parser.add_argument(
         "--reuse-latest", action="store_true", help="Skip training: evaluate and freeze the newest run."
     )
@@ -291,7 +332,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Print the plan and exit.")
     args = parser.parse_args()
 
-    order = [s for s in DEFAULT_ORDER if s in args.stages]
+    order = [s for s in ALL_ORDER if s in args.stages]
     print("plan:", " -> ".join(order))
     for name in order:
         stage = STAGES[name]

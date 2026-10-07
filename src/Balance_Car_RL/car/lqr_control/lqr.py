@@ -10,7 +10,7 @@ import torch
 from scipy.linalg import solve_discrete_are
 from scipy.signal import cont2discrete
 
-from Balance_Car_RL.car.car_cfg import WHEEL_STALL_TORQUE_NM
+from Balance_Car_RL.car.pid_control.cascade_pid import both_wheels, upright_state
 
 from .model import PlantParams, linear_model
 
@@ -43,9 +43,10 @@ class LQRController:
 
     def act(self, obs: torch.Tensor) -> torch.Tensor:
         """``obs`` is ``[pitch, pitch_rate, wheel_vel_L, wheel_vel_R, ...]`` (N, >= 4); returns actions (N, 2)."""
-        pitch, pitch_rate = obs[:, 0], obs[:, 1]
-        psi_dot = 0.5 * (obs[:, 2] + obs[:, 3]) + pitch_rate  # joint speed is relative to the body
-        state = torch.stack([pitch, pitch_rate, psi_dot], dim=1)
-        total_torque = -(state @ self.gain)
-        action = torch.clamp(total_torque / (2.0 * WHEEL_STALL_TORQUE_NM), -1.0, 1.0)
-        return action.unsqueeze(1).repeat(1, 2)
+        return self.step(*upright_state(obs))
+
+    def step(self, pitch, pitch_rate, psi_dot, psi_dot_target=0.0) -> torch.Tensor:
+        """Balance at the absolute wheel speed ``psi_dot_target`` [rad/s]: driving upright at a constant wheel speed is
+        an equilibrium of the model too, so the regulator acts on the speed error; actions (N, 2)."""
+        state = torch.stack([pitch, pitch_rate, psi_dot - psi_dot_target], dim=1)
+        return both_wheels(-(state @ self.gain))

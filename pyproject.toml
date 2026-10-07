@@ -8,9 +8,9 @@ requires = ["uv_build>=0.12.6,<0.13"]
 build-backend = "uv_build"
 
 [project]
-name = "Balance_Car_RL"
+name = "Self_Balancing_Robot_RL"
 version = "0.1.0"
-description = "Isaac Lab environments for Balance_Car_RL."
+description = "Self-balancing robot (Pololu Balboa 32U4) trained with reinforcement learning in Isaac Lab."
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [
@@ -100,6 +100,7 @@ module-name = "Balance_Car_RL"
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+extend-exclude = ["ros"]  # ROS 2 package: ament style (single quotes, google import order), checked by ament_flake8
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
@@ -148,7 +149,7 @@ markers = [
 
 [tool.codespell]
 skip = "*.usd,*.usda,*.usdc,*.json,*.onnx,*.pt,*.mp4,*.data,uv.lock,logs"
-# Vietnamese words without accents in car/tools/summarize_training_run.py (copied from Drone_RL)
+# Vietnamese words without accents in car/tools/summarize_training_run.py (local only, not in git; copied from Drone_RL)
 ignore-words-list = "ket,mot,som,thay,thi,tich,tru"
 
 [[tool.uv.index]]

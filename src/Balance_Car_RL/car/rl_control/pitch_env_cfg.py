@@ -1,7 +1,8 @@
-"""Pitch task (``BalanceCar-Pitch-v0``), stage 1 of the cascade: hold a commanded lean while random pushes hit the car.
+"""Pitch layer of the gain cascade (``BalanceCar-Pitch-Gains-v0``, ``gains_env_cfg.py``): hold a commanded lean while
+random pushes hit the car.
 
-IMU pitch and rate, wheel speeds, pitch target -> one torque per wheel. A leaning car accelerates, so a pitch target is
-a way to ask for acceleration; the stage above (``velocity_env_cfg.py``) uses this. A lean cannot be held for long: the
+IMU pitch and rate, wheel speeds, pitch target -> wheel torque. A leaning car accelerates, so a pitch target is a way
+to ask for acceleration; the speed layer above (``gains_env_cfg.py``) uses this. A lean cannot be held for long: the
 wheels reach 0.94 m/s at no load, and at that speed the motors have no torque left. The target is therefore small,
 changes every 0.5 to 1.5 s and is flipped when the car is already fast (``mdp/commands.py``), like the output of a speed
 controller. Everything else is ``car_env_cfg.py``; details: ``guide/04_training.md``.
@@ -54,7 +55,7 @@ class PitchRewardsCfg(RewardsCfg):
         params={"command_name": "target", "std": 0.05},
     )
     wheel_vel = RewTerm(
-        func=mdp.wheel_vel_l2,
+        func=isaac_mdp.joint_vel_l2,  # squared wheel speed: the car should not drive away while balancing
         weight=-0.002,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_wheel_joint"])},
     )

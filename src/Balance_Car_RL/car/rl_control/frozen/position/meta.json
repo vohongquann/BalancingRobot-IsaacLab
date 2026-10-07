@@ -1,0 +1,46 @@
+{
+  "stage": "position",
+  "task": "BalanceCar-Position-v0",
+  "run": "logs/rsl_rl/balance_car_position/2026-10-07_20-19-23",
+  "checkpoint": "model_599.pt",
+  "date": "2026-10-07T20:49:45",
+  "needs": [
+    "velocity"
+  ],
+  "evaluation": {
+    "controller": "policy logs/rsl_rl/balance_car_position/2026-10-07_20-19-23/model_599.pt",
+    "episodes finished": 768,
+    "fall rate": 0.0,
+    "rms pitch [rad]": 0.17441919059585667,
+    "pitch estimate RMS error [rad]": 0.02055860808949625,
+    "RMS turn rate [rad/s]": 0.9042752395314341,
+    "mean |wheel speed| [rad/s]": 4.95782671145324,
+    "mean |wheel torque| [N m]": 0.010381919664555582,
+    "mean planar speed [m/s]": 0.15943618780676405,
+    "max pitch seen [rad]": 0.6629196405410767,
+    "RMS distance tracking error [m]": 0.3625855498681295,
+    "settled RMS distance error, 5.0 s after a command change [m]": 0.012851498270232756,
+    "median / 90th percentile |distance error| on the last step of a command [m]": [
+      0.008396865800023079,
+      0.016499578952789307
+    ],
+    "median / 90th percentile |distance error| [m]": [
+      0.018059488385915756,
+      0.7028121948242188
+    ],
+    "RMS heading tracking error [rad]": 0.8049471013810146,
+    "settled RMS heading error, 5.0 s after a command change [rad]": 0.022124151155587187,
+    "median / 90th percentile |heading error| on the last step of a command [rad]": [
+      0.011971235275268555,
+      0.03073883056640625
+    ],
+    "median / 90th percentile |heading error| [rad]": [
+      0.03354978561401367,
+      1.529721975326538
+    ],
+    "pass": true
+  },
+  "needs_sha256": {
+    "velocity": "11b69b4c59938579c90fe4a3dcda91aa5904a87d3ddd24528a218656b3b27e6f"
+  }
+}

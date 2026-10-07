@@ -1,33 +1,45 @@
 r"""RL tasks of the Balboa: one file per task, built from the shared terms of ``car/mdp/``.
 
-    BalanceCar-Upright-v0    upright_env_cfg.py    IMU, wheel speeds         -> wheel torques  (baseline)
-    BalanceCar-Pitch-v0      pitch_env_cfg.py      + pitch target            -> wheel torques  (cascade stage 1)
-    BalanceCar-Velocity-v0   velocity_env_cfg.py   IMU, speed, speed target  -> pitch target   (stage 2, frozen pitch)
+The RL cascade copies Isaac Lab's legged locomotion: a velocity policy that goes from a (v_x, w_z) command straight to
+the actuators (``isaaclab_tasks/core/velocity``), and a navigation policy over it, frozen, that writes that command to
+reach a 2D pose (``isaaclab_tasks/contrib/navigation``):
 
-    car_env_cfg.py           scene, action, observation, events, rewards, terminations shared by the three
+    BalanceCar-Velocity-v0   velocity_env_cfg.py   IMU, speed, turn rate, (v_x, w_z)   -> wheel torques  (stage 1)
+    BalanceCar-Position-v0   position_env_cfg.py   IMU, speed, turn rate, goal x y h   -> (v_x, w_z)     (stage 2)
+    BalanceCar-Upright-v0    upright_env_cfg.py    IMU, wheel speeds                   -> wheel torques  (ROS baseline)
+
+Gain tasks: the layers of the classical cascade (speed PID -> pitch target -> pitch PID -> torque), where a network
+writes the three PID gains (kp, ki, kd) of its layer and the PID of ``pid_control/`` computes the output (the zero
+action is the tuned PID; ``gains_env_cfg.py``, ``mdp/gains.py``). Trained bottom-up, the speed layer over the frozen
+pitch one:
+
+    BalanceCar-Pitch-Gains-v0      pitch target -> pitch PID gains -> wheel torques      (frozen/pitch_gains/)
+    BalanceCar-Velocity-Gains-v0   speed target -> speed PID gains -> pitch target -> frozen pitch gain layer
+    BalanceCar-Position-Gains-v0   goal (x, y, heading) -> go-to-goal PID gains -> (v_x, w_z) -> frozen velocity network
+                                   (the PID layer of the position task, ``position_gains_env_cfg.py``)
+
+    car_env_cfg.py           scene, action, observation, events, rewards, terminations shared by every task
+    pitch_env_cfg.py         the pitch layer of the gain cascade (command, observation, rewards)
     frozen/                  <stage>/policy.pt (+ policy.onnx, meta.json) of a finished stage, loaded by the stage above
 
 PPO settings: ``agents/<task>_ppo_cfg.py``. Workflow: guide/04_training.md.
 
-Commands, from the repo root, in the order to run them. The cascade is trained bottom-up: pitch, then velocity on the
-frozen pitch. Freezing = play and export the newest run, evaluate it, and only if it passes copy it to
+Commands, from the repo root. Freezing = play and export the newest run, evaluate it, and only if it passes copy it to
 ``frozen/<stage>/`` with its ``meta.json`` (``scripts/train_cascade.py``). ``--viz kit`` opens the Isaac Sim window
 (slower, so fewer envs); without it: headless. ``isaaclab train`` exits with code 0 even when it crashes: look for
 ``Training time``.
 
-    # everything in one command: train, play, evaluate, freeze, video, for pitch and then velocity
-    python scripts/train_cascade.py                      # [--no-video] [--stages pitch] [--dry-run]
+    # everything in one command: train, play, evaluate, freeze, video, for velocity and then position
+    python scripts/train_cascade.py                      # [--no-video] [--stages velocity] [--dry-run]
 
     # the same step by step
-    # 1. pitch (nothing frozen below it)
-    isaaclab train --rl_library rsl_rl --task BalanceCar-Pitch-v0 --num_envs 4096 \
-        --video --video_length 300 --video_interval 2400                           # [--viz kit]
-    python scripts/train_cascade.py --stages pitch --reuse-latest       # export, evaluate, freeze the newest run
+    # 1. velocity (nothing frozen below it)
+    isaaclab train --rl_library rsl_rl --task BalanceCar-Velocity-v0 --num_envs 16384               # [--viz kit]
+    python scripts/train_cascade.py --stages velocity --reuse-latest    # export, evaluate, freeze the newest run
 
-    # 2. velocity (needs frozen/pitch/)
-    isaaclab train --rl_library rsl_rl --task BalanceCar-Velocity-v0 --num_envs 4096 \
-        --video --video_length 300 --video_interval 2400
-    python scripts/train_cascade.py --stages velocity --reuse-latest
+    # 2. position (needs frozen/velocity/)
+    isaaclab train --rl_library rsl_rl --task BalanceCar-Position-v0 --num_envs 16384
+    python scripts/train_cascade.py --stages position --reuse-latest
 
     # 3. upright, for the ROS node (nothing is frozen: its ONNX goes to models/)
     isaaclab train --rl_library rsl_rl --task BalanceCar-Upright-v0 --num_envs 4096
@@ -35,8 +47,12 @@ frozen pitch. Freezing = play and export the newest run, evaluate it, and only i
     python scripts/evaluate.py --task BalanceCar-Upright-v0 --num_envs 256 --checkpoint ${RUN}model_299.pt
     timeout 150 isaaclab play --rl_library rsl_rl --task BalanceCar-Upright-v0 --num_envs 4 \
         --checkpoint ${RUN}model_299.pt
-    mkdir -p models && python -c "import onnx; onnx.save_model(onnx.load('${RUN}exported/policy.onnx', \
-        load_external_data=True), 'models/balance_car_policy.onnx', save_as_external_data=False)"
+    # one file, without the stack traces (absolute paths of this machine) the exporter stores per node
+    mkdir -p models && python -c "import runpy; runpy.run_path('scripts/train_cascade.py')['onnx_single_file'](\
+        '${RUN}exported/policy.onnx', 'models/balance_car_policy.onnx')"
+
+    # 4. the gain tasks: the network writes PID gains. Velocity needs frozen/pitch_gains/, position frozen/velocity/
+    python scripts/train_cascade.py --stages pitch_gains velocity_gains position_gains    # [--no-video] [--dry-run]
 
     # look at a policy, and the baselines for comparison
     isaaclab play --rl_library rsl_rl --task BalanceCar-Velocity-v0 --num_envs 4 --viz kit
@@ -49,8 +65,14 @@ import gymnasium as gym
 
 _TASKS = {
     "BalanceCar-Upright-v0": ("upright_env_cfg:UprightEnvCfg", "upright_ppo_cfg:UprightPPORunnerCfg"),
-    "BalanceCar-Pitch-v0": ("pitch_env_cfg:PitchEnvCfg", "pitch_ppo_cfg:PitchPPORunnerCfg"),
     "BalanceCar-Velocity-v0": ("velocity_env_cfg:VelocityEnvCfg", "velocity_ppo_cfg:VelocityPPORunnerCfg"),
+    "BalanceCar-Position-v0": ("position_env_cfg:PositionEnvCfg", "position_ppo_cfg:PositionPPORunnerCfg"),
+    "BalanceCar-Pitch-Gains-v0": ("gains_env_cfg:PitchGainsEnvCfg", "gains_ppo_cfg:PitchGainsPPORunnerCfg"),
+    "BalanceCar-Velocity-Gains-v0": ("gains_env_cfg:VelocityGainsEnvCfg", "gains_ppo_cfg:VelocityGainsPPORunnerCfg"),
+    "BalanceCar-Position-Gains-v0": (
+        "position_gains_env_cfg:PositionGainsEnvCfg",
+        "position_gains_ppo_cfg:PositionGainsPPORunnerCfg",
+    ),
 }
 
 for _task, (_env, _agent) in _TASKS.items():
