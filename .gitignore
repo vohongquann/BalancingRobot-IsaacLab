@@ -9,7 +9,7 @@ dist/
 
 logs/
 outputs/
-videos/
+# videos/
 wandb/
 
 .vscode/settings.json
